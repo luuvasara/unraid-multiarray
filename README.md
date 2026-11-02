@@ -3,6 +3,13 @@
 Run several independent parity-protected arrays on one Unraid server (default: three), each with
 its own Main tab: Main, Main2, Main3.
 
+> **Proof of concept. Do not install this on a production server.**
+> It exists to show that multiple arrays are within easy reach for Unraid itself, not to replace
+> built-in support. It loads its own copies of the parity driver and has only been tested in a VM.
+> Use a test machine or a VM with disks you don't care about.
+>
+> The webGUI side of this is proposed upstream in [unraid/webgui#2813](https://github.com/unraid/webgui/pull/2813).
+
 ## It is simpler than it sounds
 
 Each array is already a self-contained unit, so a second one only needs a second copy of the same stack:
@@ -37,7 +44,7 @@ picked up automatically.
 
 ## Status
 
-Proof of concept, tested in a VM on Unraid 7.3.4 (all with three arrays running at once):
+Proof of concept (see the warning above), tested in a VM on Unraid 7.3.4 (all with three arrays running at once):
 - parity sync and parity checks in parallel, 0 errors
 - disk failure with emulated reads, then rebuild
 - start/stop cycles of the main array
