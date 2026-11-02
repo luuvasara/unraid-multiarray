@@ -1,0 +1,94 @@
+#!/usr/bin/php -q
+<?PHP
+/* gen-pages [N...]: generate the native Main tabs for extra arrays from the STOCK dynamix sources
+ * (ArrayDevices.page, ArrayOperation.page, nchan/device_list, nchan/parity_list) by text substitution.
+ * Every substitution must match at least once; a miss means the stock file changed -> logged + exit 1 (see NATIVE-MAIN.md). */
+$PL  = '/usr/local/emhttp/plugins/multiarray';
+$DX  = '/usr/local/emhttp/plugins/dynamix';
+$LIB = "$PL/include/lib.php";
+$R   = '/var/lib/multiarray';
+$cfg = @parse_ini_file('/boot/config/plugins/multiarray/multiarray.cfg') ?: @parse_ini_file("$PL/default.cfg");
+$arrays = (int)($cfg['ARRAYS'] ?? 3);
+$host = in_array('--host', $argv);
+$list = array_values(array_filter(array_slice($argv, 1), fn($a) => $a !== '--host')) ?: ($host ? [] : range(2, max(2, min(9, $arrays))));
+$miss = 0;
+
+function sub(&$text, $from, $to, $what, $regex = false) {
+  global $miss, $cur;
+  $cnt = 0;
+  $text = $regex ? preg_replace($from, $to, $text, -1, $cnt) : str_replace($from, $to, $text, $cnt);
+  if (!$cnt) { $miss++; fwrite(STDERR, "gen-pages: a$cur: substitution not found: $what\n"); }
+}
+function split_page($file) { [$h, $b] = explode("\n---\n", file_get_contents($file), 2); return [$h, $b]; }
+function hdr($h, $k) { return preg_match('/^'.$k.'="([^"]*)"/m', $h, $m) ? $m[1] : ''; }
+
+$ad = split_page("$DX/ArrayDevices.page");
+$ao = split_page("$DX/ArrayOperation.page");
+$dl = file_get_contents("$DX/nchan/device_list");
+$pl = file_get_contents("$DX/nchan/parity_list");
+
+if ($host) {   /* host Main: stock device_list + pinned-disk filter, bind-mounted over the stock file by 'multiarray hostfilter' */
+  $cur = 'host'; $s = $dl;
+  sub($s, 'require_once "$docroot/webGui/include/publish.php";', "require_once \"\$docroot/webGui/include/publish.php\";\nrequire_once '$LIB';", 'host lib include');
+  sub($s, '$devs   = (array)@parse_ini_file("$varroot/devs.ini",true);', '$devs   = ma_filter_devs((array)@parse_ini_file("$varroot/devs.ini",true));', 'host devs filter');
+  @mkdir("$R/host", 0755, true);
+  file_put_contents("$R/host/device_list", $s); chmod("$R/host/device_list", 0755);
+}
+foreach ($list as $cur) {
+  $N = (int)$cur;
+  $st = "$R/a$N/state"; $cfgdir = "$R/cfg$N"; $vt = "$R/a$N/vartmp";
+  $cond = "is_file('$R/a$N/ns.id') &amp;&amp; is_file('$st/var.ini')";
+  $cond = html_entity_decode($cond);
+  $enter = "<?PHP require_once '$LIB'; \$__ma = ma_enter($N); ?>\n";
+  $leave = "\n<?PHP ma_leave(\$__ma); ?>";
+  $fwd = "/plugins/multiarray/include/update.php?n=$N";
+
+  /* ---- ArrayDevices -> Main{N}Devices.page ---- */
+  $b = $ad[1];
+  /* (no text substitutions: the table skeleton is filled by the renamed device_list publisher) */
+  $hdrs = "Menu=\"Main$N:1\"\nTitle=\"Array $N Devices\"\nTag=\"".hdr($ad[0], 'Tag')."\"\nCond=\"$cond\"\n---\n";
+  file_put_contents("$PL/Main{$N}Devices.page", $hdrs.$enter.$b.$leave);
+
+  /* ---- ArrayOperation -> Main{N}Operation.page ---- */
+  $b = $ao[1];
+  sub($b, 'action="/update.htm"', "action=\"$fwd\"", 'form action /update.htm');
+  sub($b, "#'/sub/(mymonitor|arraymonitor|fsState|paritymonitor|mainPingListener)'#", "'/sub/\${1}$N'", 'nchan channel names', true);
+  sub($b, "'/sub/devices<?=\$spot?\",parity\":\"\"?>'", "'/sub/devices$N<?=\$spot?\",parity$N\":\"\"?>'", 'devices+parity subscription');
+  sub($b, "/webGui/include/ParityControl.php',{action:", "/plugins/multiarray/include/parity.php',{n:$N,action:", 'ParityControl.php');
+  sub($b, "/webGui/include/ToggleState.php', {device:device,", "/plugins/multiarray/include/toggle.php', {n:$N,device:device,", 'ToggleState.php');
+  sub($b, "\$stamps = '/var/tmp/stamps.ini'", "\$stamps = '$vt/stamps.ini'", 'stamps.ini path');
+  sub($b, 'last_parity_log()', "ma_last_parity_log($N)", 'last_parity_log');
+  sub($b, '#<form name="shutdownOps".*?</form>#s', '', 'host Reboot/Shutdown form (removed)', true);
+  sub($b, '#<input type="button" value="_\(History\)_" onclick="parityHistory\(\)">#', '', 'History button (host log; removed)', true);
+  $hdrs = "Menu=\"Main$N:5\"\nTitle=\"Array $N Operation\"\nTag=\"".hdr($ao[0], 'Tag')."\"\nNchan=\"device_list$N,parity_list$N\"\nCond=\"$cond\"\n---\n";
+  file_put_contents("$PL/Main{$N}Operation.page", $hdrs.$enter.$b.$leave);
+
+  /* ---- nchan/device_list -> nchan/device_list{N} ---- */
+  @mkdir("$PL/nchan", 0755, true);
+  $s = $dl;
+  sub($s, "\$varroot  = '/var/local/emhttp';", "\$varroot  = '$st';", 'device_list varroot');
+  sub($s, "'/var/tmp/pool_log.tmp'", "'$vt/pool_log.tmp'", 'pool_log');
+  sub($s, "'/boot/config/smart-all.cfg'", "'$cfgdir/smart-all.cfg'", 'smart-all');
+  sub($s, "'/boot/config/smart-one.cfg'", "'$cfgdir/smart-one.cfg'", 'smart-one');
+  sub($s, "publish('devices',", "publish('devices$N',", 'publish devices');
+  sub($s, "publish('arraymonitor',", "publish('arraymonitor$N',", 'publish arraymonitor');
+  sub($s, "ping('mainPingListener')", "ping('mainPingListener$N')", 'ping');
+  sub($s, "action='/update.htm'", "action='$fwd'", 'device_list form action');
+  sub($s, "value='\"._var(\$var,'csrf_token').\"'", "value='\".(@parse_ini_file('/var/local/emhttp/var.ini')['csrf_token']??'').\"'", 'host csrf token in assignment form');
+  sub($s, '"/Main/$source?name=$realName"', "\"/Main$N\"", 'per-disk page link (no per-array Device page)');
+  file_put_contents("$PL/nchan/device_list$N", $s); chmod("$PL/nchan/device_list$N", 0755);
+
+  /* ---- nchan/parity_list -> nchan/parity_list{N} ---- */
+  $s = $pl;
+  sub($s, "\$varroot  = '/var/local/emhttp';", "\$varroot  = '$st';", 'parity_list varroot');
+  sub($s, "'/boot/config/parity-checks.log'", "'$cfgdir/parity-checks.log'", 'parity log');
+  sub($s, "'/var/tmp/stamps.ini'", "'$vt/stamps.ini'", 'parity stamps');
+  sub($s, "'/var/tmp/resync.ini'", "'$vt/resync.ini'", 'parity resync');
+  sub($s, 'require_once "$docroot/webGui/include/publish.php";', "require_once \"\$docroot/webGui/include/publish.php\";\nrequire_once '$LIB';", 'lib include');
+  sub($s, 'last_parity_check()', "ma_last_parity_check($N)", 'last_parity_check');
+  sub($s, "#publish_noDupe\\('(parity|paritymonitor|fsState|mymonitor)',#", "publish_noDupe('\${1}$N',", 'parity_list channels', true);
+  sub($s, 'ping("mainPingListener")', "ping(\"mainPingListener$N\")", 'parity_list ping');
+  file_put_contents("$PL/nchan/parity_list$N", $s); chmod("$PL/nchan/parity_list$N", 0755);
+  @mkdir("$R/a$N/vartmp", 0755, true);
+}
+exit($miss ? 1 : 0);

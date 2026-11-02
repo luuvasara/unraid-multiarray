@@ -1,0 +1,8 @@
+Markdown="false"
+Menu="Tasks:1"
+Type="xmenu"
+Title="Main9"
+Code="e908"
+Cond="(int)(@parse_ini_file('/boot/config/plugins/multiarray/multiarray.cfg')['ARRAYS']?:3)>=9"
+---
+<?PHP $arr = 9; include "/usr/local/emhttp/plugins/multiarray/include/main.php"; ?>

@@ -1,0 +1,61 @@
+<?xml version='1.0' standalone='yes'?>
+<!DOCTYPE PLUGIN [
+<!ENTITY name    "multiarray">
+<!ENTITY author  "unraid-multiarray project">
+<!ENTITY version "2026.11.02b">
+<!ENTITY source  "https://raw.githubusercontent.com/luuvasara/unraid-multiarray/main">
+<!ENTITY base    "/boot/config/plugins/&name;">
+<!ENTITY md5     "734b9090086cc3c0c14b9eced4258a1b">
+]>
+<PLUGIN name="&name;" author="&author;" version="&version;" min="7.3.0" icon="server" launch="Settings/MultiArray" pluginURL="&source;/&name;.plg" support="https://github.com/luuvasara/unraid-multiarray/issues">
+
+<CHANGES>
+###&version;
+- First public release: extra arrays (default 3 in total), native Main2/Main3 tabs, disk pinning, hotplug updates.
+</CHANGES>
+
+<!-- 1. the package: scripts, pages, events (kernel independent) -->
+<FILE Name="&base;/&name;-&version;-x86_64-1.txz" Run="upgradepkg --install-new">
+<URL>&source;/packages/&name;-&version;-x86_64-1.txz</URL>
+<MD5>&md5;</MD5>
+</FILE>
+
+<!-- 2. the kernel-specific drivers: one md_unraidN.ko per extra array, fetched per running kernel -->
+<FILE Run="/bin/bash">
+<INLINE>
+KVER=$(uname -r)
+mkdir -p &base;/ko/$KVER
+for N in 2 3 4 5 6 7 8 9; do
+  [ -s &base;/ko/$KVER/md_unraid$N.ko ] || curl -fsS --max-time 60 -o &base;/ko/$KVER/md_unraid$N.ko "&source;/ko/$KVER/md_unraid$N.ko" \
+    || { rm -f &base;/ko/$KVER/md_unraid$N.ko; echo "multiarray: no driver build for kernel $KVER (md_unraid$N) - extra arrays stay disabled until the plugin is updated"; break; }
+done
+# drop packages of older versions
+for f in &base;/&name;-*.txz; do [ "$f" = "&base;/&name;-&version;-x86_64-1.txz" ] || rm -f "$f"; done
+# default settings on first install
+[ -f &base;/multiarray.cfg ] || cp /usr/local/emhttp/plugins/&name;/default.cfg &base;/multiarray.cfg
+# native MainN pages are generated from the stock dynamix pages of THIS Unraid version
+/usr/local/emhttp/plugins/&name;/scripts/gen-pages || echo "multiarray: gen-pages: stock page changed, see /var/log/syslog"
+/usr/local/emhttp/plugins/&name;/scripts/multiarray hostfilter sync
+# hotplug: udev rule (in the package) refreshes running instances' disk views when a disk comes or goes
+udevadm control --reload 2&gt;/dev/null
+/usr/local/emhttp/plugins/&name;/scripts/multiarray refresh
+# installed while the main array is already running: bring the extra arrays up now
+grep -q '^mdState="STARTED"' /var/local/emhttp/var.ini 2>/dev/null &amp;&amp; ( setsid /usr/local/emhttp/plugins/&name;/scripts/multiarray start all &gt;/dev/null 2&gt;&amp;1 &lt;/dev/null &amp; )
+exit 0
+</INLINE>
+</FILE>
+
+<!-- 3. removal: stop the extra arrays cleanly first; arrayN config (incl. superblocks) is KEPT on the flash -->
+<FILE Run="/bin/bash" Method="remove">
+<INLINE>
+/usr/local/emhttp/plugins/&name;/scripts/multiarray stop all
+/usr/local/emhttp/plugins/&name;/scripts/multiarray hostfilter off
+removepkg &base;/&name;-*.txz
+udevadm control --reload 2&gt;/dev/null
+rm -f &base;/&name;-*.txz
+rm -rf &base;/ko /var/lib/multiarray
+echo "multiarray removed; array configs kept in &base;/array*/"
+</INLINE>
+</FILE>
+
+</PLUGIN>

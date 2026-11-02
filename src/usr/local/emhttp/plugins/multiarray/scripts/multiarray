@@ -1,0 +1,233 @@
+#!/bin/bash
+# multiarray start|stop|restart [N|all]   status [N]   status-json   gen-seed N
+# Instance N (2..ARRAYS) = an unmodified second emhttpd + shfs + nginx/php-fpm in private mount+UTS namespaces.
+. /usr/local/emhttp/plugins/multiarray/scripts/lib.sh
+mkdir -p $RUNROOT $FLASH
+
+seed_flash() {   # first start only: create /boot/config/plugins/multiarray/arrayN from the host's config
+  local N=$1 D=$FLASH/array$1 H=/boot/config
+  [ -f $D/ident.cfg ] && return 0
+  log "a$N: seeding $D"
+  mkdir -p $D/plugins/dynamix
+  # start from the host's top-level settings files, minus array 1's state, credentials and the files seeded below
+  for f in $H/*; do [ -f "$f" ] || continue
+    case ${f##*/} in super*.dat|super.old|forcesync|parity-checks.log|passwd|shadow|smbpasswd|secrets.tdb|go|machine-id|random-seed|drift|ident.cfg|disk.cfg|share.cfg|docker.cfg|domain.cfg|*.bak) continue ;; esac
+    cp -f "$f" $D/; done
+  cp -f $H/plugins/dynamix/dynamix.cfg $D/plugins/dynamix/ 2>/dev/null
+  for f in disk.cfg share.cfg docker.cfg domain.cfg; do [ -f $D/$f ] || cp $PLUG/seed/$f $D/$f; done
+  local HOSTNAME_=$(hostname)
+  grep -vE '^(NAME|PORT|PORTSSL|USE_SSL|USE_NTP|USE_UPNP|BIND_MGT|USE_TELNET|USE_SSH|START_PAGE)=' $H/ident.cfg > $D/ident.cfg
+  cat >> $D/ident.cfg <<EOF
+NAME="${HOSTNAME_}-a$N"
+PORT="$(port_of $N)"
+PORTSSL="$((BASEPORT + 1000 + N))"
+USE_SSL="no"
+USE_NTP="no"
+USE_UPNP="no"
+BIND_MGT="no"
+USE_TELNET="no"
+USE_SSH="no"
+START_PAGE="Main"
+EOF
+}
+
+
+# ---- disk pinning (DISKS<N>="by-id-name ..." in multiarray.cfg; unset/empty = instance sees every disk) ----
+disk_of() { local b=$1; case $b in nvme*|mmcblk*) echo "${b%p[0-9]*}" ;; sd*|hd*|vd*) echo "${b%%[0-9]*}" ;; *) echo "$b" ;; esac; }
+is_phys() { case $1 in sd*|hd*|vd*|nvme*|mmcblk*) return 0 ;; esac; return 1; }
+# allowed whole-disk names for instance N -> $allow (" flash d1 d2 "), or "" = no pinning (instance sees every disk)
+compute_allow() {
+  local N=$1 want name dev a
+  want=$(eval echo \$DISKS$N); allow=""
+  [ -n "${want// /}" ] || return 0
+  allow=" $(disk_of "$(basename "$(findmnt -no SOURCE /boot)")") "
+  for name in $want; do
+    dev=$(readlink -f /dev/disk/by-id/$name 2>/dev/null); dev=${dev##*/}
+    if [ -n "$dev" ] && [ -b /dev/$dev ]; then allow+="$(disk_of $dev) "; else log "a$N: pinned disk $name not present"; fi
+  done
+  # safety: a disk instance N has assigned stays visible even if it was unpinned (hiding it would fail the disk)
+  for dev in $(sed -n 's/^device="\(.*\)"/\1/p' $RUNROOT/a$N/state/disks.ini 2>/dev/null); do a=$(disk_of $dev)
+    [[ "$allow" == *" $a "* ]] || { allow+="$a "; log "a$N: $dev is assigned in array $N, kept visible although not pinned"; }; done
+}
+# filtered views of /sys/dev/block, /sys/block, /dev/disk/by-id into $2 (dirs of symlinks; bind-mounted by inst-run)
+build_stage() {
+  local S=$2 l t b
+  mkdir -p $S/devblock $S/block $S/byid
+  for l in /sys/dev/block/*; do t=$(readlink $l); b=${t##*/}
+    if is_phys $b && [[ "$allow" != *" $(disk_of $b) "* ]]; then continue; fi; ln -s "$t" $S/devblock/${l##*/}; done
+  for l in /sys/block/*; do b=${l##*/}
+    if is_phys $b && [[ "$allow" != *" $b "* ]]; then continue; fi; ln -s "$(readlink $l)" $S/block/$b; done
+  for l in /dev/disk/by-id/*; do t=$(readlink $l); b=${t##*/}
+    if is_phys $b && [[ "$allow" != *" $(disk_of $b) "* ]]; then continue; fi; ln -s "$t" $S/byid/${l##*/}; done
+}
+host_disks() { local l; for l in /sys/block/*; do is_phys ${l##*/} && echo ${l##*/}; done; }
+visible_set() { local d; for d in $(host_disks); do [ -z "$allow" ] || [[ "$allow" == *" $d "* ]] && echo $d; done; }
+stage_disks() {    # at instance start
+  local N=$1 R=$RUNROOT/a$1
+  rm -rf $R/stage $R/allow $R/whiteout
+  compute_allow $N; visible_set > $R/visible
+  [ -n "$allow" ] || return 0
+  build_stage $N $R/stage
+  : > $R/whiteout
+  for l in /dev/sd* /dev/hd* /dev/vd* /dev/nvme* /dev/mmcblk*; do [ -b $l ] || continue; b=${l##*/}
+    [[ "$allow" != *" $(disk_of $b) "* ]] && echo $b >> $R/whiteout; done
+  echo "$allow" > $R/allow
+  log "a$N: pinned disks: $allow"
+}
+# live update of a RUNNING instance's disk view (hotplug, pin change); emhttpd picks it up on its next rescan
+sync_dir() { local o=$1 n=$2 f; for f in $o/*; do [ -L "$f" ] && [ ! -L "$n/${f##*/}" ] && rm -f "$f"; done
+  for f in $n/*; do [ -L "$f" ] || continue; [ "$(readlink "$o/${f##*/}" 2>/dev/null)" = "$(readlink "$f")" ] || ln -sfn "$(readlink "$f")" "$o/${f##*/}"; done; }
+refresh_one() {
+  local N=$1 R=$RUNROOT/a$1 pid old had=0 d l b show="" hide="" ns
+  pid=$(em_pid $N); [ -n "$pid" ] || return 0
+  [ -s $R/allow ] && had=1
+  compute_allow $N
+  [ -f $R/visible ] || visible_set > $R/visible   # instance started by an older version: treat the current set as known
+  old=" $(tr '\n' ' ' < $R/visible) "
+  rm -rf $R/stage.new; build_stage $N $R/stage.new
+  ns="nsenter -t $pid -m --"
+  if [ -n "$allow" ]; then
+    if [ $had = 1 ]; then for d in devblock block byid; do sync_dir $R/stage/$d $R/stage.new/$d; done
+    else rm -rf $R/stage; mv $R/stage.new $R/stage
+      $ns sh -c "mount --bind $R/stage/devblock /sys/dev/block && mount --bind $R/stage/block /sys/block && mount --bind $R/stage/byid /dev/disk/by-id" \
+        || log "a$N: refresh: could not mount filtered views"; fi
+    echo "$allow" > $R/allow
+  elif [ $had = 1 ]; then
+    $ns sh -c "umount /sys/dev/block; umount /sys/block; umount /dev/disk/by-id"; rm -f $R/allow
+  fi
+  rm -rf $R/stage.new
+  # /dev inside the instance (overlay over the host /dev): hide every node of a non-visible disk, (re)create nodes of newly visible ones.
+  # Only NEWLY visible disks get nodes: emhttpd moves claimed raw nodes away at array start and that must stay so.
+  for l in /dev/sd* /dev/hd* /dev/vd* /dev/nvme* /dev/mmcblk*; do [ -b $l ] || continue; b=${l##*/}; d=$(disk_of $b)
+    if [ -n "$allow" ] && [[ "$allow" != *" $d "* ]]; then hide+="/dev/$b "
+    elif [[ "$old" != *" $d "* ]]; then show+="$b:$(stat -c '%t:%T' $l) "; fi; done
+  # disks that left the view (unpinned or unplugged): drop their nodes too (a node mknod'ed earlier outlives the host's)
+  local gone="" nowvis=" $(visible_set | tr '\n' ' ') "
+  for b in $($ns sh -c 'cd /dev && for f in sd* hd* vd* nvme* mmcblk*; do [ -b "$f" ] && echo $f; done'); do
+    [[ "$nowvis" == *" $(disk_of $b) "* ]] || gone+="/dev/$b "; done
+  $ns sh -c "for f in $gone; do [ -b \$f ] && rm -f \$f; done; for f in $hide; do [ -e \$f ] && rm -f \$f; done
+    for e in $show; do f=/dev/\${e%%:*}; m=\${e#*:}; [ -e \$f ] || mknod \$f b \$((0x\${m%%:*})) \$((0x\${m#*:})); done; true"
+  visible_set > $R/visible
+  [ "$old" = " $(tr '\n' ' ' < $R/visible) " ] && return 0
+  # emhttpd does not rescan disks by itself: its cmdHotplug command makes it re-read /sys + by-id (devs.ini / disks.ini)
+  log "a$N: disk view refreshed, visible: $(tr '\n' ' ' < $R/visible)(rescan: HTTP $(em_cmd $N 'cmdHotplug=apply'))"
+}
+refresh() {        # all running instances; serialized, re-reads the flash config
+  exec 8>$RUNROOT/refresh.lock; flock 8
+  [ -r $CFG ] && . <(tr -d '\r' < $CFG)
+  local N; for N in $(seq 2 $ARRAYS); do refresh_one $N; done
+  hostfilter sync >/dev/null 2>&1
+}
+
+prepare() {      # volatile per-start files in RAM
+  local N=$1 R=$RUNROOT/a$1 HP f
+  rm -rf $R; mkdir -p $R/seed $R/bin $RUNROOT/real $R/state $R/run $R/vartmp; chmod 1777 $R/state $R/run
+  cp -f $FLASH/multiarray.cfg $RUNROOT/multiarray.cfg 2>/dev/null
+  if [ ! -x $RUNROOT/real/kmod ]; then
+    cp "$(readlink -f /sbin/kmod)" $RUNROOT/real/kmod
+    for f in insmod rmmod modprobe lsmod modinfo; do ln -sf kmod $RUNROOT/real/$f; done
+  fi
+  # kmod dispatcher with N baked in (must keep $0 = the symlink name, so it is a copy, not a wrapper)
+  { echo '#!/bin/bash'; echo "N=$N"; echo "PLUG=$PLUG"; tail -n +2 $PLUG/scripts/kmod-dispatch; } > $R/bin/kmod; chmod 755 $R/bin/kmod
+  # /etc/rc.d: real nginx/php-fpm/runlog/library, everything else a no-op
+  mkdir -p $R/rc.d
+  for f in /etc/rc.d/rc.*; do case ${f##*/} in
+    rc.nginx|rc.php-fpm|rc.runlog|rc.library.source) cp -p $f $R/rc.d/ ;;
+    *) cp $PLUG/seed/noop $R/rc.d/${f##*/} ;; esac; done
+  # nginx: private copy; php sees a distinct HTTP_HOST so the session cookie name differs from the host GUI's
+  cp -a /etc/nginx $R/etc-nginx
+  echo "fastcgi_param  HTTP_HOST        multiarray-a$N.invalid;" >> $R/etc-nginx/fastcgi_params
+  cp /etc/default/nginx $R/etc-default-nginx   # stock CSP (frame-ancestors 'self'): the instance GUI is no longer framed
+  for f in network nginx proxy statics; do cp /var/local/emhttp/$f.ini $R/seed/ 2>/dev/null; done
+}
+
+start_one() {
+  local N=$1 i
+  inst_running $N && { echo "array $N already running"; return 0; }
+  [ "$SERVICE" = enable ] || { echo "service disabled"; return 0; }
+  drv_check $N || return 3
+  drv_loaded $N && { log "a$N: stale driver module, unloading"; drv_unload $N; }
+  seed_flash $N
+  prepare $N
+  stage_disks $N
+  $PLUG/scripts/gen-pages $N >>$LOG 2>&1 || log "a$N: gen-pages reported missing substitutions (stock page changed?)"
+  mkdir -p $RUNROOT/cfg$N; mountpoint -q $RUNROOT/cfg$N || mount --bind $FLASH/array$N $RUNROOT/cfg$N
+  log "a$N: starting (port $(port_of $N), driver $DRIVER)"
+  N=$N SB=$(sb_path $N) setsid unshare -m -u --propagation private $PLUG/scripts/inst-run >>$LOG 2>&1 </dev/null 9>&- &
+  for i in $(seq 1 60); do
+    inst_running $N && [ -n "$(inst_var $N mdState)" ] && { log "a$N: up, mdState=$(inst_var $N mdState)"; echo "array $N started (GUI port $(port_of $N))"; return 0; }
+    sleep 1
+  done
+  log "a$N: did not come up"; echo "array $N failed to start, see $LOG" >&2; return 1
+}
+
+em_cmd() {   # em_cmd N 'cmdStop=Stop'   (@STATE@ expands to mdState)
+  local p; p=$(em_pid $1) || return 1
+  nsenter -t $p -m -- bash -c '
+    T=$(grep -oP "^csrf_token=\"\K[^\"]+" /var/local/emhttp/var.ini)
+    S=$(grep -oP "^mdState=\"\K[^\"]+" /var/local/emhttp/var.ini)
+    curl -s --unix-socket /var/run/emhttpd.socket -X POST http://localhost/update.htm --data "csrf_token=$T&${1//@STATE@/$S}" -o /dev/null -w "%{http_code}\n"' _ "$2"
+}
+
+stop_one() {
+  local N=$1 i st p
+  if inst_running $N; then
+    st=$(inst_var $N mdState)
+    if [ "$st" = STARTED ]; then
+      log "a$N: stopping array (cmdStop)"; em_cmd $N cmdStop=Stop >/dev/null
+      for i in $(seq 1 300); do st=$(inst_var $N mdState); [ "$st" = STOPPED ] && break; sleep 1; done
+      log "a$N: array state after stop: $st"
+      [ "$st" = STOPPED ] || { echo "array $N did not stop cleanly (mdState=$st); leaving it running" >&2; return 1; }
+    fi
+    for p in $(inst_pids $N); do kill $p 2>/dev/null; done
+    for i in 1 2 3 4 5 6 7 8 9 10; do [ -z "$(inst_pids $N)" ] && break; sleep 1; done
+    for p in $(inst_pids $N); do kill -9 $p 2>/dev/null; done
+  fi
+  drv_unload $N
+  rm -f $RUNROOT/a$N/ns.id; rm -rf $RUNROOT/a$N/state/* $RUNROOT/a$N/run/* 2>/dev/null
+  mountpoint -q $RUNROOT/cfg$N && umount $RUNROOT/cfg$N
+  log "a$N: stopped"; echo "array $N stopped"
+}
+
+# host Main: hide pinned disks from the host's unassigned list/dropdowns by bind-mounting a generated copy of the stock nchan/device_list
+HOSTDL=/usr/local/emhttp/plugins/dynamix/nchan/device_list
+hostfilter() {
+  local want=0 n mounted=0
+  grep -q " $HOSTDL " /proc/self/mountinfo && mounted=1
+  if [ "$1" != off ]; then for n in 2 3 4 5 6 7 8 9; do [ -n "$(eval echo \$DISKS$n | tr -d ' ')" ] && want=1; done; fi
+  if [ $want = 1 ]; then
+    [ $mounted = 1 ] && umount $HOSTDL   # gen-pages must read the STOCK file, not our previous override
+    rm -f $RUNROOT/host/device_list
+    if ! $PLUG/scripts/gen-pages --host >>$LOG 2>&1; then
+      log "host device_list substitution failed, filter not applied"; pkill -f "$HOSTDL" 2>/dev/null; return 0; fi
+    mount --bind $RUNROOT/host/device_list $HOSTDL && log "host Main: pinned disks hidden (device_list override mounted)"
+    pkill -f "$HOSTDL" 2>/dev/null; true   # running nchan copy restarts on the next page view with the override
+  elif [ $mounted = 1 ]; then umount $HOSTDL; log "host Main: device_list override removed"; pkill -f "$HOSTDL" 2>/dev/null; true
+  fi
+}
+
+targets() { case "$1" in ""|all) seq 2 $ARRAYS ;; *) echo "$1" ;; esac; }
+
+status_json() {
+  local N sep=""; echo -n '['
+  for N in $(seq 2 9); do
+    local run=false st="" ; inst_running $N && { run=true; st=$(inst_var $N mdState); }
+    echo -n "$sep{\"n\":$N,\"enabled\":$([ $N -le $ARRAYS ] && echo true || echo false),\"running\":$run,\"mdState\":\"$st\",\"fsState\":\"$(inst_var $N fsState)\",\"port\":$(port_of $N),\"driver\":$(drv_check $N 2>/dev/null && echo '"ok"' || echo '"missing"')}"
+    sep=","
+  done; echo ']'
+}
+
+case "$1" in start|stop) exec 9>$RUNROOT/lock; flock 9 ;; esac
+case "$1" in
+  start)   for N in $(targets $2); do start_one $N; done; hostfilter sync ;;
+  stop)    rc=0; for N in $(targets $2 | sort -rn); do stop_one $N || rc=1; done; exit $rc ;;
+  restart) $0 stop $2; $0 start $2 ;;
+  status)  for N in $(seq 2 $ARRAYS); do echo "array $N: $(inst_running $N && echo running || echo stopped) mdState=$(inst_var $N mdState) port=$(port_of $N)"; done ;;
+  status-json) status_json ;;
+  hostfilter) hostfilter ${2:-sync} ;;
+  refresh) refresh ;;
+  hotplug) ( sleep 2; setsid $0 refresh ) >/dev/null 2>&1 </dev/null & ;;   # from the udev rule: return at once, refresh after udev settles
+  gen-pages) shift; exec $PLUG/scripts/gen-pages "$@" ;;
+  em)      shift; em_cmd "$@" ;;
+  *) echo "usage: $0 start|stop|restart [N|all] | refresh | status | status-json | em N cmd" >&2; exit 2 ;;
+esac

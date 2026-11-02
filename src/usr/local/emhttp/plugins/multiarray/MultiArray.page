@@ -1,0 +1,80 @@
+Menu="OtherSettings"
+Type="xmenu"
+Markdown="false"
+Title="Multi Arrays"
+Icon="server"
+---
+<?PHP
+require_once '/usr/local/emhttp/plugins/multiarray/include/lib.php';
+$cfg = parse_plugin_cfg('multiarray');
+$total = max(1, min(9, (int)$cfg['ARRAYS']));
+/* by-id name for a device: prefer ata-/scsi-/nvme-/usb- (the names emhttpd itself prefers), never -part, never wwn-/eui- if another exists */
+function ma_byid($dev) {
+  $best = null; $rank = ['ata-'=>1,'scsi-'=>2,'nvme-'=>3,'usb-'=>4];
+  foreach ((array)@scandir('/dev/disk/by-id') as $n) {
+    if ($n[0]=='.' || strpos($n,'-part')!==false) continue;
+    if (basename((string)@realpath("/dev/disk/by-id/$n")) != $dev) continue;
+    $r = 9; foreach ($rank as $pre=>$v) if (strpos($n,$pre)===0) $r = $v;
+    if ($best===null || $r < $best[0]) $best = [$r,$n];
+  }
+  return $best[1] ?? null;
+}
+$devs = (array)@parse_ini_file('/var/local/emhttp/devs.ini', true);   // host view: disks not in array 1 / pools
+$choices = [];
+foreach ($devs as $d) { $id = ma_byid($d['device'] ?? ''); if ($id) $choices[$id] = $d; }
+uasort($choices, function($a,$b){ return strnatcmp($a['device'],$b['device']); });
+?>
+<form method="POST" action="/update.php" target="progressFrame" onsubmit="maCollect()">
+<input type="hidden" name="#file" value="multiarray/multiarray.cfg">
+<input type="hidden" name="#command" value="/plugins/multiarray/scripts/multiarray">
+<input type="hidden" name="#arg[1]" value="refresh">
+<dl><dt>Enable multi arrays:</dt><dd><select name="SERVICE"><?=mk_option($cfg['SERVICE'],'enable','Yes')?><?=mk_option($cfg['SERVICE'],'disable','No')?></select></dd></dl>
+
+<dl><dt>Total number of arrays (including the main array, 1-9):</dt><dd><input type="number" name="ARRAYS" min="1" max="9" value="<?=htmlspecialchars($cfg['ARRAYS'])?>" class="narrow"></dd></dl>
+
+<?
+/* pin grid (same idea as Settings > CPU Pinning): one row per disk, one radio column per array; "Not pinned" = left to the main array */
+$pin = []; for ($n=2; $n<=$total; $n++) foreach (preg_split('/\s+/', trim($cfg["DISKS$n"] ?? ''), -1, PREG_SPLIT_NO_EMPTY) as $id) $pin[$id] = $n;
+$rows = $choices; foreach ($pin as $id=>$n) if (!isset($rows[$id])) $rows[$id] = null;   // pinned but not present / in use
+?>
+<dl><dt>Disk pinning (an extra array with no pinned disks sees every disk, as before):</dt><dd>
+<?for ($n=2; $n<=$total; $n++):?><input type="hidden" name="DISKS<?=$n?>" id="ma-d<?=$n?>" value=""><?endfor;?>
+<table class="ma-pin" style="border-collapse:collapse;width:auto">
+<thead><tr><th style="text-align:left;padding:2px 12px 2px 0">Disk</th><th style="padding:2px 8px">Not pinned</th>
+<?for ($n=2; $n<=$total; $n++):?><th style="padding:2px 8px">Array <?=$n?></th><?endfor;?></tr></thead>
+<tbody>
+<?$i=0; foreach ($rows as $id=>$d): $i++; $cur = $pin[$id] ?? 0;?>
+<tr><td style="padding:2px 12px 2px 0"><?=htmlspecialchars($id)?>
+  <?if ($d):?>(<?=htmlspecialchars($d['device'])?>, <?=my_scale(($d['sectors']??0)*512,$u,1)?> <?=$u?>)<?else:?>(not present / in use)<?endif;?></td>
+<?for ($n=0; $n<=$total; $n++): if ($n==1) continue;?>
+  <td style="text-align:center;padding:2px 8px"><input type="radio" class="ma-pin" name="#pin<?=$i?>" data-id="<?=htmlspecialchars($id)?>" value="<?=$n?>" <?=$cur==$n?'checked':''?>></td>
+<?endfor;?></tr>
+<?endforeach;?>
+<?if (!$rows):?><tr><td colspan="<?=$total+1?>"><em>No free disks: every disk is in the main array or a pool.</em></td></tr><?endif;?>
+</tbody></table>
+</dd></dl>
+<div class="title"><span class="left"><i class="fa fa-bug title"></i>Debug</span></div>
+<dl><dt>First instance GUI port (array 2; array N uses port + N - 2):</dt><dd><input type="number" name="BASEPORT" min="1024" max="65000" value="<?=htmlspecialchars($cfg['BASEPORT'])?>" class="narrow"></dd></dl>
+<dl><dt>Instance GUIs (each extra array's own, unmodified Unraid web GUI; for debugging and for pages the MainN tabs lack, e.g. per-disk pages and parity history. Separate login; only its Main tab is meaningful):</dt><dd>
+<?for ($n=2; $n<=$total; $n++): $p = (int)$cfg['BASEPORT'] + $n - 2;?>
+  <a class="ma-inst" data-port="<?=$p?>" href="#" target="_blank">Array <?=$n?> instance GUI (port <?=$p?>)</a><?=ma_ready($n)?'':' &mdash; instance not running'?><br>
+<?endfor;?>
+</dd></dl>
+<script>$('a.ma-inst').each(function(){this.href=location.protocol+'//'+location.hostname+':'+$(this).data('port')+'/Main';});</script>
+
+<dl><dt>&nbsp;</dt><dd><input type="submit" value="Apply"><input type="button" value="Done" onclick="done()"></dd></dl>
+</form>
+
+<script>
+function maCollect(){
+  $('input[id^=ma-d]').each(function(){
+    var n=this.id.substr(4), v=[];
+    $('input.ma-pin:checked').each(function(){ if (this.value==n) v.push($(this).data('id')); });
+    this.value=v.join(' ');
+  });
+}
+</script>
+
+<p>Pinned disks are hidden from that array's own disk list (its emhttpd gets a filtered /sys and /dev) and from the main
+Main tab's unassigned list. The main array's emhttpd itself still sees every disk. Pin changes and disks being plugged in or removed are applied to running arrays within a few seconds (no restart); a disk assigned in a running array is never hidden.
+Config of array N lives in /boot/config/plugins/multiarray/arrayN/; the log is /var/log/multiarray.log.</p>

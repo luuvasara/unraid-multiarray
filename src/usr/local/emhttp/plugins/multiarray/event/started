@@ -1,0 +1,6 @@
+#!/bin/bash
+# array 1 reached "Started": bring up the extra arrays (in the background, emhttpd waits for event scripts)
+. /usr/local/emhttp/plugins/multiarray/scripts/lib.sh
+echo "$(date '+%F %T') event started" >> $LOG
+[ "$SERVICE" = enable ] && ( setsid $PLUG/scripts/multiarray start all >>$LOG 2>&1 </dev/null & )
+exit 0

@@ -1,0 +1,28 @@
+#!/bin/bash
+# bind-mounted over /sbin/kmod inside instance N's namespace (modprobe/rmmod/insmod/lsmod are symlinks to kmod).
+# Maps emhttpd's "md-mod" to the driver of instance N. Env: N PLUG (set by the generated wrapper).
+. $PLUG/scripts/lib.sh
+R=$RUNROOT/a$N
+SB=$(sb_path $N)
+name=$(basename "$0"); [ "$name" = kmod ] && { name=$1; shift; }
+if [ "$1" = "md-mod" ]; then
+  case $name in
+    rmmod)
+      log "a$N: rmmod md-mod -> drv_unload"
+      # nothing may hold the module: emhttpd has just stopped the array
+      drv_unload $N || exit 1
+      exit 0 ;;
+    modprobe)
+      log "a$N: modprobe md-mod -> drv_load"
+      drv_loaded $N && exit 0
+      drv_load $N "$SB" || exit 1
+      read CMDP STATP <<<"$(drv_ctl $N)"
+      for pair in "mdcmd:$CMDP" "mdstat:$STATP"; do   # drop stale layers, bind the live entry
+        f=${pair%%:*}; src=${pair#*:}
+        while grep -q " /proc/$f " /proc/self/mounts; do umount -l /proc/$f || break; done
+        mount --bind $src /proc/$f || { log "a$N: BIND-FAILED $f"; exit 1; }
+      done
+      exit 0 ;;
+  esac
+fi
+exec $RUNROOT/real/$name "$@"

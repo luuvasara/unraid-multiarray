@@ -1,0 +1,4 @@
+#!/bin/bash
+# trace of the emhttp event order (evidence for choosing hooks); harmless
+echo "$(date '+%F %T') emhttp event: $1" >> /var/log/multiarray-events.log
+exit 0

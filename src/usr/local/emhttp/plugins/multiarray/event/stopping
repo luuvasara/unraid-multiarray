@@ -1,0 +1,6 @@
+#!/bin/bash
+# array 1 is about to stop: stop the extra arrays first (cleanly), synchronously
+. /usr/local/emhttp/plugins/multiarray/scripts/lib.sh
+echo "$(date '+%F %T') event stopping" >> $LOG
+$PLUG/scripts/multiarray stop all >>$LOG 2>&1
+exit 0

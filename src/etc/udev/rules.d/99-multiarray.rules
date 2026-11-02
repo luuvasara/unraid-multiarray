@@ -1,0 +1,2 @@
+# multiarray: a whole disk appeared or disappeared -> refresh the disk views of the running extra arrays (returns at once)
+SUBSYSTEM=="block", ENV{DEVTYPE}=="disk", ACTION=="add|remove", KERNEL=="sd*|hd*|vd*|nvme*|mmcblk*", RUN+="/usr/local/emhttp/plugins/multiarray/scripts/multiarray hotplug"

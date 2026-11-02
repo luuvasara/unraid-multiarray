@@ -1,0 +1,43 @@
+#!/bin/bash
+# Runs INSIDE a fresh private mount+UTS namespace (see multiarray start): confine an unmodified
+# emhttpd to extra array $N. Env from caller: N PLUG FLASH RUNROOT SB DRIVER_LIB
+set -e
+PLUG=${PLUG:-/usr/local/emhttp/plugins/multiarray}
+. $PLUG/scripts/lib.sh
+R=$RUNROOT/a$N
+PORT=$(port_of $N)
+hostname "$(hostname)-a$N"
+# state + run dirs are host-backed so the host GUI (native MainN pages, forwarder) can read state and reach emhttpd.socket
+mount --bind $R/state /var/local/emhttp
+cp $R/seed/*.ini /var/local/emhttp/
+mount --bind $R/run /var/run
+mount -t tmpfs inst-tmp /tmp
+mount -t tmpfs inst-mnt /mnt
+mount --bind $RUNROOT/cfg$N /boot/config
+mount --bind $R/rc.d /etc/rc.d
+for f in /usr/local/sbin/emhttp_event /usr/local/sbin/update_cron /usr/local/emhttp/webGui/scripts/update_access; do mount --bind $PLUG/seed/noop $f; done
+mount --bind $R/bin/kmod /sbin/kmod
+# driver: load now, expose its proc entries under the stock names
+drv_load $N "$SB"
+read CMDP STATP <<<"$(drv_ctl $N)"
+mount --bind $CMDP /proc/mdcmd
+mount --bind $STATP /proc/mdstat
+# private /dev (overlay) so md<slot>p1 can be re-pointed at this instance's major without touching the host's nodes
+mkdir -p $R/devup $R/devwork
+[ -s $R/allow ] && while read b; do mknod $R/devup/$b c 0 0; done < $R/whiteout   # overlay whiteouts hide non-pinned disk nodes
+mount -t overlay devov -o lowerdir=/dev,upperdir=$R/devup,workdir=$R/devwork /dev
+M=$(drv_major $N)
+for s in $(seq 1 28); do rm -f /dev/md${s}p1; mknod /dev/md${s}p1 b $M $s; done
+# disk pinning: filtered sysfs/by-id views + /dev whiteouts (staged by 'multiarray start'); absent = instance sees all disks
+if [ -s $R/allow ]; then
+  mount --bind $R/stage/devblock /sys/dev/block
+  mount --bind $R/stage/block /sys/block
+  mount --bind $R/stage/byid /dev/disk/by-id
+fi
+mount --bind $R/etc-nginx /etc/nginx
+mount --bind $R/etc-default-nginx /etc/default/nginx
+mount -t tmpfs inst-php /var/lib/php
+mount -t tmpfs inst-vartmp /var/tmp
+readlink /proc/self/ns/mnt > $R/ns.id
+(sleep 3; /etc/rc.d/rc.php-fpm start; /etc/rc.d/rc.nginx start) &
+exec /usr/libexec/unraid/emhttpd
