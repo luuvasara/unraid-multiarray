@@ -1,0 +1,14 @@
+/* About tab of the plugin kit. No colours of its own: the page text and link colours of the active theme apply. */
+.kit-about { padding: 8px 10px; max-width: 900px; }
+.kit-about p { margin: 6px 0; text-align: left; }
+.kit-about-name { font-size: 1.1em; font-weight: bold; }
+.kit-about-ver { font-size: 1.9em; font-weight: bold; line-height: 1.3; }
+.kit-about-h { margin: 18px 0 6px; font-size: 1.05em; }
+.kit-about-rel { margin: 12px 0 4px; }
+.kit-about-list { margin: 4px 0 4px 22px; padding: 0; list-style: disc; }
+.kit-about-list li { margin: 3px 0; text-align: left; }
+.kit-about-list code { font-family: bitstream, monospace; }
+.kit-about-old { margin-top: 10px; }
+.kit-about-old summary { cursor: pointer; }
+.kit-about-more { margin-top: 16px; opacity: 0.8; }
+.kit-about-legal code { font-family: bitstream, monospace; overflow-wrap: anywhere; }

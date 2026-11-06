@@ -1,3 +1,5 @@
+<img src="icon.png" width="96" alt="Multi Arrays">
+
 # unraid-multiarray: more than one Unraid array
 
 Run several independent parity-protected arrays on one Unraid server (default: three), each with
@@ -24,6 +26,20 @@ Each array is already a self-contained unit, so a second one only needs a second
 No Unraid file is modified. The whole plugin is under 800 lines of shell and PHP.
 Arrays never need to coordinate with each other: moving data between them is an ordinary copy
 between two mount points.
+
+## Screenshots
+
+Settings, Multi Arrays: the number of arrays and which disk belongs to which array.
+
+![Multi Arrays settings](docs/screenshots/settings.png)
+
+Main2: the devices of array 2.
+
+![Array 2 devices](docs/screenshots/array-devices.png)
+
+Main2: the operation panel of array 2.
+
+![Array 2 operation](docs/screenshots/array-operation.png)
 
 ## Use
 
@@ -58,7 +74,9 @@ Not yet:
 ## Development
 
 - `src/`: package root (extracted to `/`)
-- `build/build.sh VERSION`: build `packages/multiarray-VERSION-x86_64-1.txz` and `multiarray.plg` (bump VERSION on every change)
+- `build.sh`: builds `packages/multiarray-<version>-x86_64-1.txz` with `kit/bin/build.sh`, writes its MD5 into `multiarray.plg` and `CHANGELOG.md` from the `.plg`'s `<CHANGES>` (bump the version in the `.plg` on every change)
+- `tests/run-tests.sh`: lint, and the `.plg` and package checks; `tests/render-test.sh` renders the About tab in headless Chrome
+- `kit/`: the shared plugin kit (build, lint, About tab)
 - `driver/md_unraid2.patch`: the change to Unraid's md driver that lets a numbered copy run next to the original
 - `build/build-ko.sh KERNEL_TREE MD_SOURCE_DIR N...`: build the driver copies `ko/<kernel>/md_unraidN.ko` for a kernel
 - `ko/`: prebuilt drivers, currently for 6.18.58-Unraid (Unraid 7.3.4); the plugin downloads the ones matching the running kernel

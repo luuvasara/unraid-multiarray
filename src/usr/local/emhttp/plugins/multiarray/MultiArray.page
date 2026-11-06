@@ -2,6 +2,7 @@ Menu="OtherSettings"
 Type="xmenu"
 Markdown="false"
 Title="Multi Arrays"
+Tabs="true"
 Icon="server"
 ---
 <?PHP

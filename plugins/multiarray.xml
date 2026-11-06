@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Plugin>
+  <Name>Multi Arrays</Name>
+  <PluginURL>https://raw.githubusercontent.com/luuvasara/unraid-multiarray/main/multiarray.plg</PluginURL>
+  <Support>https://github.com/luuvasara/unraid-multiarray/issues</Support>
+  <Project>https://github.com/luuvasara/unraid-multiarray</Project>
+  <Icon>https://raw.githubusercontent.com/luuvasara/unraid-multiarray/main/icon.png</Icon>
+  <Category>Tools:System</Category>
+  <MinVer>7.3.0</MinVer>
+  <License>GPL-2.0</License>
+  <ReadMe>https://github.com/luuvasara/unraid-multiarray#readme</ReadMe>
+  <ExtraSearchTerms>array parity second array multiple arrays md pool main</ExtraSearchTerms>
+  <Overview>Proof of concept. Do not install this on a production server. It exists to show that multiple arrays are within easy reach for Unraid itself, not to replace built-in support. Use a test machine or a VM with disks you don't care about.
+
+Runs several independent parity-protected arrays on one Unraid server (default: three), each with its own Main tab: Main, Main2, Main3.
+
+- Loads one more copy of Unraid's md driver per extra array, under its own name.
+- Each extra array runs Unraid's own array management, user shares and mover, with its own config folder and state.
+- Main2, Main3 and so on are generated at install from the stock Main page of the running Unraid version.
+- Settings, Multi Arrays: set the number of arrays and pin each disk to an array.
+
+No Unraid file is modified. A driver build is needed per Unraid kernel version.</Overview>
+</Plugin>

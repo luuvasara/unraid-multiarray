@@ -1,0 +1,12 @@
+#!/bin/bash
+# kit-sync <plugin-repo> - copy this kit into <plugin-repo>/kit, so the plugin repository builds and tests by itself.
+# kit/KIT-VERSION records the commit it came from. Commit the result in the plugin repository.
+set -euo pipefail
+KIT=$(cd "$(dirname "$0")/.." && pwd)
+D=$(cd "$1" && pwd)
+[ -f "$D/plugin.conf" ] || { echo "FATAL: $D has no plugin.conf"; exit 1; }
+rm -rf "$D/kit"; mkdir -p "$D/kit"
+(cd "$KIT" && git ls-files -z -- bin runtime render LICENSE README.md | xargs -0 cp -a --parents -t "$D/kit/")
+git -C "$KIT" log -1 --format='%h %cs' >"$D/kit/KIT-VERSION"
+git -C "$KIT" diff --quiet HEAD -- bin runtime render || echo "modified" >>"$D/kit/KIT-VERSION"
+echo "kit $(tr '\n' ' ' <"$D/kit/KIT-VERSION")copied to $D/kit"

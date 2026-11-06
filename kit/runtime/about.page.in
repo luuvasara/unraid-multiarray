@@ -1,0 +1,43 @@
+Menu="@@MENU@@"
+Title="About"
+Tag="info-circle"
+Markdown="false"
+---
+<?php
+/* About: made by the build from the plugin kit. The installed version, the latest changes and the links. The changes come from
+ * kit/changes.txt (the .plg's <CHANGES>) and are drawn by kit/about.js with textContent only. */
+$kit_slug = '@@NAME@@';
+$kit_root = ($docroot ?? '/usr/local/emhttp') . "/plugins/$kit_slug/kit";
+require_once "$kit_root/changes.php";
+$kit_h = fn($s) => htmlspecialchars((string)$s, ENT_QUOTES, 'UTF-8');
+$kit_changes = kit_changes(getenv('KIT_CHANGES') ?: "$kit_root/changes.txt");
+$kit_links = array_filter([
+  ['Support', '@@SUPPORT@@', 'questions about installing and using the plugin'],
+  ['GitHub repository', '@@REPO@@', 'documentation and source code'],
+  ['Issues', '@@REPO@@/issues', 'bugs and feature requests'],
+]);
+$kit_more = '@@MORE@@';
+$kit_more_label = '@@MORE_LABEL@@';
+$kit_v = substr(md5((string)@md5_file("$kit_root/about.js") . @md5_file("$kit_root/about.css")), 0, 10);
+?>
+<link rel="stylesheet" href="/plugins/<?=$kit_slug?>/kit/about.css?v=<?=$kit_v?>">
+<div class="kit-about" id="kit-about-<?=$kit_slug?>" data-changes="<?=$kit_h(json_encode($kit_changes))?>">
+  <p class="kit-about-name">@@TITLE@@</p>
+  <p class="kit-about-ver" data-kit="ver"></p>
+  <p>@@SUMMARY@@</p>
+  <h3 class="kit-about-h">Latest changes</h3>
+  <ul class="kit-about-list" data-kit="latest"></ul>
+  <details class="kit-about-old" data-kit="old" hidden><summary>Earlier versions</summary><div data-kit="oldbody"></div></details>
+  <h3 class="kit-about-h">Help and links</h3>
+  <ul class="kit-about-list">
+<?php foreach ($kit_links as [$kit_t, $kit_u, $kit_d]): ?>
+    <li><a href="<?=$kit_h($kit_u)?>" target="_blank" rel="noopener"><?=$kit_h($kit_t)?></a>: <?=$kit_h($kit_d)?></li>
+<?php endforeach; ?>
+  </ul>
+  <h3 class="kit-about-h">Source and licence</h3>
+  <p class="kit-about-legal">@@TITLE@@ is by the @@AUTHOR@@. It is free software under the <a href="@@REPO@@/blob/main/LICENSE" target="_blank" rel="noopener">GNU General Public License, version 2</a>; the licence text also comes with the plugin, in <code>/usr/local/emhttp/plugins/<?=$kit_slug?>/LICENSE</code>. The complete source code, including the kit it is built with, is in the <a href="@@REPO@@" target="_blank" rel="noopener">GitHub repository</a>.</p>
+<?php if ($kit_more !== ''): ?>
+  <p class="kit-about-more">More Unraid plugins: <a href="<?=$kit_h($kit_more)?>" target="_blank" rel="noopener"><?=$kit_h($kit_more_label)?></a></p>
+<?php endif; ?>
+</div>
+<script src="/plugins/<?=$kit_slug?>/kit/about.js?v=<?=$kit_v?>"></script>
