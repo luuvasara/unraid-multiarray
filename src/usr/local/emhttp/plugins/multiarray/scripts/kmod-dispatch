@@ -5,24 +5,46 @@
 R=$RUNROOT/a$N
 SB=$(sb_path $N)
 name=$(basename "$0"); [ "$name" = kmod ] && { name=$1; shift; }
+# the instance must never reach another driver (the host's /proc/mdcmd): on a lost binding, end the instance at once
+die() { log "a$N: DRIVER BINDING LOST ($1; /proc/mdstat sbName=$(sed -n 's/^sbName=//p' /proc/mdstat 2>/dev/null)): killing instance $N"
+  local p; for p in $(inst_pids $N); do [ "$p" = $$ ] || kill -9 $p 2>/dev/null; done; exit 1; }
+layers() { grep -c "^[^ ]* [^ ]* [^ ]* [^ ]* /proc/$1 " /proc/self/mountinfo; }
+rebind() {   # keep the inert cover at the bottom, drop dead layers above it, bind the live entries on top
+  local CMDP STATP pair f src
+  read CMDP STATP <<<"$(drv_ctl $N)"
+  for pair in "mdcmd:$CMDP" "mdstat:$STATP"; do
+    f=${pair%%:*}; src=${pair#*:}
+    if [ "$(layers $f)" -lt 1 ]; then mount --bind $R/inert/$f /proc/$f && mount -o remount,bind,ro /proc/$f || return 1; fi
+    while [ "$(layers $f)" -gt 1 ]; do umount -l /proc/$f || return 1; done
+    mount --bind $src /proc/$f || { log "a$N: BIND-FAILED $f"; return 1; }
+  done
+}
+# the instance's /dev is an overlay over the host's devtmpfs; a driver reload deletes and re-creates the disk nodes
+# there (possibly with another major), which the overlay does not follow reliably. Keep our own nodes in the upper layer.
+mdnodes() {   # mdnodes N major|"" : (re)create md<slot>p1 and <prefix><slot>p1 with this major, or remove them
+  local s pre; pre=$(drv_disk_prefix $N)
+  for s in $(seq 1 28); do
+    rm -f /dev/md${s}p1 /dev/${pre}${s}p1
+    [ -n "$1" ] && { mknod /dev/md${s}p1 b $1 $s; mknod /dev/${pre}${s}p1 b $1 $s; }
+  done; return 0
+}
 if [ "$1" = "md-mod" ]; then
   case $name in
     rmmod)
       log "a$N: rmmod md-mod -> drv_unload"
+      md_guard $N || die "before rmmod"
       # nothing may hold the module: emhttpd has just stopped the array
       drv_unload $N || exit 1
+      mdnodes ""      # no node may keep a major that another array's driver can get next
       exit 0 ;;
     modprobe)
       log "a$N: modprobe md-mod -> drv_load"
-      drv_loaded $N && exit 0
-      drv_load $N "$SB" || exit 1
-      read CMDP STATP <<<"$(drv_ctl $N)"
-      for pair in "mdcmd:$CMDP" "mdstat:$STATP"; do   # drop stale layers, bind the live entry
-        f=${pair%%:*}; src=${pair#*:}
-        while grep -q " /proc/$f " /proc/self/mounts; do umount -l /proc/$f || break; done
-        mount --bind $src /proc/$f || { log "a$N: BIND-FAILED $f"; exit 1; }
-      done
+      drv_loaded $N || drv_load $N "$SB" || exit 1
+      rebind || die "re-bind after load"   # also when the module was still loaded: its proc entries may be new
+      md_guard $N || die "after load"
+      mdnodes "$(drv_major $N)"
       exit 0 ;;
   esac
 fi
+md_guard $N || die "$name $*"
 exec $RUNROOT/real/$name "$@"

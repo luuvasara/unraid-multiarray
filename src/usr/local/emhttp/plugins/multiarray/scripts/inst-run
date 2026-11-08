@@ -7,27 +7,42 @@ PLUG=${PLUG:-/usr/local/emhttp/plugins/multiarray}
 R=$RUNROOT/a$N
 PORT=$(port_of $N)
 hostname "$(hostname)-a$N"
+# unshare copied every host mount; drop the host's data mounts here (lazily, in this private namespace only), or this
+# namespace keeps the host's disks, user shares and pools busy (a host zpool export fails "busy")
+awk '$2 ~ "^/mnt(/|$)|^/var/lib/(docker|libvirt)(/|$)|^/etc/libvirt(/|$)|^/(var/)?run/docker(/|$)" || $3 == "zfs" || $3 == "fuse.shfs" {print $2}' /proc/self/mounts |
+  sort -r | while read -r m; do umount -l "$(printf '%b' "$m")" 2>/dev/null; done
 # state + run dirs are host-backed so the host GUI (native MainN pages, forwarder) can read state and reach emhttpd.socket
 mount --bind $R/state /var/local/emhttp
 cp $R/seed/*.ini /var/local/emhttp/
 mount --bind $R/run /var/run
 mount -t tmpfs inst-tmp /tmp
 mount -t tmpfs inst-mnt /mnt
+# own /root: emhttpd keeps an encryption key in /root/keyfile; each array has its own, never the host's
+mkdir -p $R/root; chmod 700 $R/root; mount --bind $R/root /root
 mount --bind $RUNROOT/cfg$N /boot/config
 mount --bind $R/rc.d /etc/rc.d
 for f in /usr/local/sbin/emhttp_event /usr/local/sbin/update_cron /usr/local/emhttp/webGui/scripts/update_access; do mount --bind $PLUG/seed/noop $f; done
 mount --bind $R/bin/kmod /sbin/kmod
-# driver: load now, expose its proc entries under the stock names
+for f in /usr/sbin/zfs /usr/sbin/zpool; do mount --bind $R/bin/zfs-scope $f; done
+# driver: load now, expose its proc entries under the stock names. Below them an inert read-only cover, so a lost
+# bind shows an empty file that refuses writes, never the host's /proc/mdcmd (kmod-dispatch keeps the cover in place)
+mkdir -p $R/inert; : > $R/inert/mdcmd; : > $R/inert/mdstat
+for f in mdcmd mdstat; do mount --bind $R/inert/$f /proc/$f; mount -o remount,bind,ro /proc/$f; done
 drv_load $N "$SB"
 read CMDP STATP <<<"$(drv_ctl $N)"
 mount --bind $CMDP /proc/mdcmd
 mount --bind $STATP /proc/mdstat
+md_guard $N || { log "a$N: driver binding check failed at start, not starting emhttpd"; exit 1; }
 # private /dev (overlay) so md<slot>p1 can be re-pointed at this instance's major without touching the host's nodes
 mkdir -p $R/devup $R/devwork
+: > $R/devlog; mount --bind /dev/log $R/devlog || true   # syslog's socket, kept before the overlay hides it
 [ -s $R/allow ] && while read b; do mknod $R/devup/$b c 0 0; done < $R/whiteout   # overlay whiteouts hide non-pinned disk nodes
 mount -t overlay devov -o lowerdir=/dev,upperdir=$R/devup,workdir=$R/devwork /dev
+# a unix socket seen through the overlay refuses connections: give syslog's own socket back
+mount --bind $R/devlog /dev/log || log "a$N: could not bind /dev/log, the instance cannot log to syslog"
 M=$(drv_major $N)
-for s in $(seq 1 28); do rm -f /dev/md${s}p1; mknod /dev/md${s}p1 b $M $s; done
+PRE=$(drv_disk_prefix $N)
+for s in $(seq 1 28); do rm -f /dev/md${s}p1 /dev/${PRE}${s}p1; mknod /dev/md${s}p1 b $M $s; mknod /dev/${PRE}${s}p1 b $M $s; done
 # disk pinning: filtered sysfs/by-id views + /dev whiteouts (staged by 'multiarray start'); absent = instance sees all disks
 if [ -s $R/allow ]; then
   mount --bind $R/stage/devblock /sys/dev/block

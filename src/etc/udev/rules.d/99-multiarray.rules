@@ -1,2 +1,4 @@
-# multiarray: a whole disk appeared or disappeared -> refresh the disk views of the running extra arrays (returns at once)
-SUBSYSTEM=="block", ENV{DEVTYPE}=="disk", ACTION=="add|remove", KERNEL=="sd*|hd*|vd*|nvme*|mmcblk*", RUN+="/usr/local/emhttp/plugins/multiarray/scripts/multiarray hotplug"
+# multiarray: a disk or a partition appeared or disappeared -> refresh the disk views of the running extra arrays (returns at once)
+SUBSYSTEM=="block", ACTION=="add|remove", KERNEL=="sd*|hd*|vd*|nvme*|mmcblk*", RUN+="/usr/local/emhttp/plugins/multiarray/scripts/multiarray hotplug"
+# a device-mapper device (an encrypted disk just opened): into the views at once, emhttpd looks it up right after opening it
+SUBSYSTEM=="block", ACTION=="add|remove", KERNEL=="dm-*", RUN+="/usr/local/emhttp/plugins/multiarray/scripts/multiarray dmview $env{ACTION} %k %M:%m"

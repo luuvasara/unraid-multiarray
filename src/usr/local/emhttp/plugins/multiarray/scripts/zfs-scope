@@ -1,0 +1,75 @@
+#!/bin/bash
+# bind-mounted over /usr/sbin/zfs and /usr/sbin/zpool inside instance N's namespace (copied with N baked in).
+# zfs pool names and the pool list are host-wide, but an instance may only touch the pools it imported or created:
+#   zfs mount -a / unmount -a      -> only this instance's pools
+#   zpool import / create NAME     -> refused when a pool of that name is already imported (host or another array)
+#   anything else that changes a pool or dataset -> refused unless it is one of this instance's pools
+# Read-only commands (list, get, status, import without a name) pass unchanged.
+. $PLUG/scripts/lib.sh
+R=$RUNROOT/a$N; OWN=$R/zpools; REAL=$RUNROOT/real
+cmd=$(basename "$0"); sub=$1
+own() { [ -n "$1" ] && grep -qx -- "$1" $OWN 2>/dev/null; }
+imported() { $REAL/zpool list -H -o name 2>/dev/null | grep -qx -- "$1"; }
+refuse() { echo "multiarray: $*" >&2; log "a$N: zfs refused: $cmd $ARGS ($*)"; exit 1; }
+pool_of() { local d=$1; d=${d%%@*}; d=${d%%#*}; echo "${d%%/*}"; }
+ARGS="$*"
+# positional arguments after the subcommand (options and their values skipped)
+case "$cmd $sub" in   # options that take a separate value, per subcommand
+  "zpool import") vo=dcoRT ;; "zpool create") vo=oOmRt ;; "zpool add"|"zpool attach"|"zpool replace") vo=o ;;
+  "zfs create") vo=oV ;; "zfs mount") vo=o ;; *) vo="" ;; esac
+pos=(); shift
+while [ $# -gt 0 ]; do case $1 in
+  -*) [ -n "$vo" ] && [[ ${#1} -eq 2 && $vo == *"${1:1:1}"* ]] && shift ;;
+  *) pos+=("$1") ;; esac; shift; done
+set -- $ARGS
+if [ $cmd = zpool ]; then
+  case $sub in
+    list|status|get|iostat|history|events|version|help|"") exec $REAL/zpool "$@" ;;
+    import)
+      [ ${#pos[@]} -eq 0 ] && exec $REAL/zpool "$@"         # a search, imports nothing
+      new=${pos[1]:-${pos[0]}}
+      if [[ ${pos[0]} =~ ^[0-9]+$ ]] && [ -z "${pos[1]}" ]; then new=$($REAL/zpool import "${@:2:$#-2}" 2>/dev/null | awk -v g="${pos[0]}" '/pool:/{n=$2} /id:/{if($2==g)print n}'); fi
+      imported "$new" && refuse "cannot import '$new': a pool with this name is already imported on this server (array 1 or another array); rename or export it first"
+      $REAL/zpool "$@" || exit $?
+      echo "$new" >> $OWN; exit 0 ;;
+    create)
+      imported "${pos[0]}" && refuse "cannot create '${pos[0]}': a pool with this name is already imported on this server (array 1 or another array)"
+      $REAL/zpool "$@" || exit $?
+      echo "${pos[0]}" >> $OWN; exit 0 ;;
+    export|destroy)
+      own "${pos[0]}" || refuse "'${pos[0]}' is not a pool of array $N"
+      $REAL/zpool "$@" || exit $?
+      grep -vx -- "${pos[0]}" $OWN > $OWN.new; mv -f $OWN.new $OWN; exit 0 ;;
+    set) p=${pos[1]} ;;
+    *) p=${pos[0]} ;;
+  esac
+  own "$(pool_of "$p")" || refuse "'$p' is not a pool of array $N"
+  exec $REAL/zpool "$@"
+fi
+# zfs
+case $sub in
+  list|get|version|help|holds|userspace|groupspace|projectspace|"") exec $REAL/zfs "$@" ;;
+  mount)
+    if [ "${pos[0]}" = "" ] && [[ " $ARGS " == *" -a "* ]]; then   # zfs mount -a: this instance's pools only
+      rc=0
+      for p in $(cat $OWN 2>/dev/null); do
+        $REAL/zfs list -H -r -t filesystem -o name,canmount,mountpoint "$p" 2>/dev/null | while read -r ds cm mp; do
+          [ "$cm" = on ] && [ "${mp:0:1}" = / ] || continue
+          awk -v d="$ds" '$1==d && $3=="zfs"{f=1} END{exit !f}' /proc/self/mounts && continue
+          $REAL/zfs mount "$ds" || echo "mount $ds failed" >&2
+        done
+      done; exit $rc
+    fi
+    [ -z "${pos[0]}" ] && exec $REAL/zfs "$@"   # zfs mount: lists mounts
+    p=${pos[0]} ;;
+  unmount|umount)
+    if [ "${pos[0]}" = "" ] && [[ " $ARGS " == *" -a "* ]]; then   # this instance's mounted datasets, deepest first
+      awk '$3=="zfs"{print length($2), $1}' /proc/self/mounts | sort -rn | while read -r _ ds; do
+        own "$(pool_of "$ds")" && $REAL/zfs unmount "$ds"; done; exit 0
+    fi
+    p=${pos[0]}; [ "${p:0:1}" = / ] && p=$(awk -v t="$p" '$2==t && $3=="zfs"{print $1}' /proc/self/mounts | tail -1) ;;
+  set|inherit) p=${pos[-1]} ;;
+  *) p=${pos[0]} ;;
+esac
+own "$(pool_of "$p")" || refuse "'${pos[0]}' is not a dataset of array $N"
+exec $REAL/zfs "$@"

@@ -387,6 +387,8 @@ function ma_x_emcmd($target, $body) {
     return $st;
   }
   require_once '/usr/local/emhttp/plugins/multiarray/include/lib.php';
+  exec('/usr/local/emhttp/plugins/multiarray/scripts/multiarray guard '.(int)$target.' '.escapeshellarg($body).' 2>&1', $why, $rc);   // same guard as the GUI forwarder
+  if ($rc !== 0) { error_log('multiarray import: '.implode(' ', $why)); return 409; }
   return ma_cmd($target, $body)[0];
 }
 

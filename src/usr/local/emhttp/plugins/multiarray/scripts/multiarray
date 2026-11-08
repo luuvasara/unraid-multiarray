@@ -5,7 +5,7 @@
 case "$1" in
   export) shift; exec /usr/local/emhttp/plugins/multiarray/scripts/xport export "$@" ;;   # read-only, works with extra arrays disabled
   import) shift; exec /usr/local/emhttp/plugins/multiarray/scripts/xport "$@" ;;
-  hotplug|refresh|start|restart|setup|gen-pages|hostfilter)
+  hotplug|dmview|refresh|start|restart|setup|gen-pages|hostfilter)
     [ "$1 ${2:-}" = "hostfilter off" ] || grep -qs '^SERVICE="enable"' /boot/config/plugins/multiarray/multiarray.cfg || exit 0 ;;
 esac
 . /usr/local/emhttp/plugins/multiarray/scripts/lib.sh
@@ -82,10 +82,10 @@ stage_disks() {    # at instance start
   log "a$N: pinned disks: $allow"
 }
 # live update of a RUNNING instance's disk view (hotplug, pin change); emhttpd picks it up on its next rescan
-sync_dir() { local o=$1 n=$2 f; for f in $o/*; do [ -L "$f" ] && [ ! -L "$n/${f##*/}" ] && rm -f "$f"; done
-  for f in $n/*; do [ -L "$f" ] || continue; [ "$(readlink "$o/${f##*/}" 2>/dev/null)" = "$(readlink "$f")" ] || ln -sfn "$(readlink "$f")" "$o/${f##*/}"; done; }
+sync_dir() { local o=$1 n=$2 f t; for f in $o/*; do [ -L "$f" ] && [ ! -L "$n/${f##*/}" ] && { t=$(readlink "$f"); rm -f "$f"; echo "${t##*/}"; }; done   # prints the devices whose entry changed
+  for f in $n/*; do [ -L "$f" ] || continue; t=$(readlink "$f"); [ "$(readlink "$o/${f##*/}" 2>/dev/null)" = "$t" ] || { ln -sfn "$t" "$o/${f##*/}"; echo "${t##*/}"; }; done; }
 refresh_one() {
-  local N=$1 R=$RUNROOT/a$1 pid old had=0 d l b show="" hide="" ns
+  local N=$1 R=$RUNROOT/a$1 pid old had=0 d l b show="" hide="" ns changed=""
   pid=$(em_pid $N); [ -n "$pid" ] || return 0
   [ -s $R/allow ] && had=1
   compute_allow $N
@@ -94,7 +94,7 @@ refresh_one() {
   rm -rf $R/stage.new; build_stage $N $R/stage.new
   ns="nsenter -t $pid -m --"
   if [ -n "$allow" ]; then
-    if [ $had = 1 ]; then for d in devblock block byid; do sync_dir $R/stage/$d $R/stage.new/$d; done
+    if [ $had = 1 ]; then changed=$(for d in devblock block byid; do sync_dir $R/stage/$d $R/stage.new/$d; done | while read -r b; do is_phys "$b" && echo "$b"; done)
     else rm -rf $R/stage; mv $R/stage.new $R/stage
       $ns sh -c "mount --bind $R/stage/devblock /sys/dev/block && mount --bind $R/stage/block /sys/block && mount --bind $R/stage/byid /dev/disk/by-id" \
         || log "a$N: refresh: could not mount filtered views"; fi
@@ -115,9 +115,17 @@ refresh_one() {
   $ns sh -c "for f in $gone; do [ -b \$f ] && rm -f \$f; done; for f in $hide; do [ -e \$f ] && rm -f \$f; done
     for e in $show; do f=/dev/\${e%%:*}; m=\${e#*:}; [ -e \$f ] || mknod \$f b \$((0x\${m%%:*})) \$((0x\${m#*:})); done; true"
   visible_set > $R/visible
-  [ "$old" = " $(tr '\n' ' ' < $R/visible) " ] && return 0
+  # a new or removed partition (emhttpd partitions a new disk at its first start) changes the view, not the disk set
+  [ "$old" = " $(tr '\n' ' ' < $R/visible) " ] && [ -z "$changed" ] && return 0
   # emhttpd does not rescan disks by itself: its cmdHotplug command makes it re-read /sys + by-id (devs.ini / disks.ini)
   log "a$N: disk view refreshed, visible: $(tr '\n' ' ' < $R/visible)(rescan: HTTP $(em_cmd $N 'cmdHotplug=apply'))"
+}
+dmview() {         # dmview add|remove dm-N MAJ:MIN - from udev: one device-mapper entry into/out of every filtered view, no rescan
+  local R k=$2 mm=$3
+  for R in $RUNROOT/a[2-9]; do [ -s $R/allow ] && [ -d $R/stage/block ] || continue
+    if [ "$1" = add ]; then ln -sfn "$(readlink /sys/block/$k)" $R/stage/block/$k; ln -sfn "$(readlink /sys/dev/block/$mm)" $R/stage/devblock/$mm
+    else rm -f $R/stage/block/$k $R/stage/devblock/$mm; fi
+  done
 }
 refresh() {        # all running instances; serialized, re-reads the flash config
   exec 8>$RUNROOT/refresh.lock; flock 8
@@ -136,6 +144,9 @@ prepare() {      # volatile per-start files in RAM
   fi
   # kmod dispatcher with N baked in (must keep $0 = the symlink name, so it is a copy, not a wrapper)
   { echo '#!/bin/bash'; echo "N=$N"; echo "PLUG=$PLUG"; tail -n +2 $PLUG/scripts/kmod-dispatch; } > $R/bin/kmod; chmod 755 $R/bin/kmod
+  # zfs/zpool scoped to this instance's own pools (bound over both binaries; $0 tells them apart)
+  for f in zfs zpool; do cp -f /usr/sbin/$f $RUNROOT/real/$f; done
+  { echo '#!/bin/bash'; echo "N=$N"; echo "PLUG=$PLUG"; tail -n +2 $PLUG/scripts/zfs-scope; } > $R/bin/zfs-scope; chmod 755 $R/bin/zfs-scope
   # /etc/rc.d: real nginx/php-fpm/runlog/library, everything else a no-op
   mkdir -p $R/rc.d
   for f in /etc/rc.d/rc.*; do case ${f##*/} in
@@ -152,9 +163,13 @@ start_one() {
   local N=$1 i
   inst_running $N && { echo "array $N already running"; return 0; }
   [ "$SERVICE" = enable ] || { echo "service disabled"; return 0; }
+  # array 1's stop reloads the host md driver, which drops every instance's /proc/mdcmd binding: instances run only
+  # while array 1 is started (its stopping event stops them first)
+  host_started || { echo "array $N not started: array 1 is not started" >&2; log "a$N: start refused, array 1 not started"; return 1; }
   drv_check $N || return 3
   drv_loaded $N && { log "a$N: stale driver module, unloading"; drv_unload $N || { echo "array $N: a stale driver still has a disk in use, see $LOG" >&2; return 1; }; }
   seed_flash $N
+  mkdir -p $FLASH/array$N/pools $FLASH/array$N/shares   # emhttpd does not create them: Add Pool and share settings need them
   prepare $N
   stage_disks $N
   $PLUG/scripts/gen-pages $N >>$LOG 2>&1 || log "a$N: gen-pages reported missing substitutions (stock page changed?)"
@@ -168,31 +183,55 @@ start_one() {
   log "a$N: did not come up"; echo "array $N failed to start, see $LOG" >&2; return 1
 }
 
-em_cmd() {   # em_cmd N 'cmdStop=Stop'   (@STATE@ expands to mdState)
-  local p; p=$(em_pid $1) || return 1
+# zfs pools array N would import (array zfs disks are pools named after the slot, a pool keeps its own name) that
+# are already imported by array 1 or another array: pool names are server-wide
+zfs_clash() {
+  local N=$1 n own=$RUNROOT/a$1/zpools
+  for n in $(zfs_pool_names $RUNROOT/a$N/state/disks.ini); do
+    grep -qx -- "$n" $own 2>/dev/null && continue
+    zpool list -H -o name 2>/dev/null | grep -qx -- "$n" && echo "$n"
+  done
+}
+# guard N [request]: 0 when instance N may get this request; else the reason on stderr. Used by em_cmd and the
+# GUI forwarder (include/update.php) before every request.
+guard() {
+  local p c; p=$(em_pid $1); [ -n "$p" ] || { echo "array $1 is not running" >&2; return 1; }
+  case "&${2:-}&" in *"&cmdStart="*|*"&cmdFormat="*|*"&cmdCheck="*)
+    c=$(zfs_clash $1 | tr '\n' ' ')
+    [ -z "$c" ] || { log "a$1: refused (${2%%=*}...): zfs pool name(s) ${c}already imported"
+      echo "array $1: refused: zfs pool name(s) ${c}are already in use on this server (array 1 or another array). Pool names are server-wide; give this array's pool another name or stop the array that has it." >&2; return 1; } ;;
+  esac
+  nsenter -t $p -m -- bash -c ". $PLUG/scripts/lib.sh; md_guard $1" || {
+    log "a$1: DRIVER BINDING LOST (instance /proc/mdstat is not array $1's driver): request refused, instance killed"
+    for p in $(inst_pids $1); do kill -9 $p 2>/dev/null; done
+    echo "array $1: its driver binding was lost; the instance was ended so it cannot reach another array's driver" >&2; return 1; }
+}
+em_cmd() {   # em_cmd N 'cmdStop=Stop'   (@STATE@ expands to mdState). Returns when emhttpd answers or after EM_TIMEOUT s.
+  local p; p=$(em_pid $1); [ -n "$p" ] || return 1
+  guard $1 "$2" || return 1
   nsenter -t $p -m -- bash -c '
     T=$(grep -oP "^csrf_token=\"\K[^\"]+" /var/local/emhttp/var.ini)
     S=$(grep -oP "^mdState=\"\K[^\"]+" /var/local/emhttp/var.ini)
-    curl -s --unix-socket /var/run/emhttpd.socket -X POST http://localhost/update.htm --data "csrf_token=$T&${1//@STATE@/$S}" -o /dev/null -w "%{http_code}\n"' _ "$2"
+    curl -s -m '"${EM_TIMEOUT:-30}"' --unix-socket /var/run/emhttpd.socket -X POST http://localhost/update.htm --data "csrf_token=$T&${1//@STATE@/$S}" -o /dev/null -w "%{http_code}\n"' _ "$2"
 }
 
 # every mdState emhttpd/the driver reports for an array that is not running (md_unraid.c): STOPPED, and the stopped-but-
 # not-startable-as-is states NEW_ARRAY RECON_DISK DISABLE_DISK SWAP_DSBL ERROR:*. Never STARTED, empty or anything unknown.
 md_is_stopped() { case "$1" in STOPPED|NEW_ARRAY|RECON_DISK|DISABLE_DISK|SWAP_DSBL|ERROR:*) return 0;; esac; return 1; }
 
-stop_one() {
-  local N=$1 i st p
+stop_one() {   # STOP_WAIT: seconds the whole stop may take (default 300)
+  local N=$1 i st p end=$((SECONDS + ${STOP_WAIT:-300}))
   if inst_running $N; then
     st=$(inst_var $N mdState)
     # a start in flight: the driver has the array started before emhttpd says so (it is still mounting); let it
     # finish and stop it the normal way, or it would be killed mid-start with the array left started
     if [ "$st" != STARTED ] && [ "$(drv_state $N)" = STARTED ]; then
       log "a$N: start in progress (driver STARTED, emhttpd $st), waiting for it"
-      for i in $(seq 1 120); do st=$(inst_var $N mdState); [ "$st" = STARTED ] && break; inst_running $N || break; sleep 1; done
+      for i in $(seq 1 120); do st=$(inst_var $N mdState); [ "$st" = STARTED ] && break; inst_running $N || break; [ $SECONDS -lt $end ] || break; sleep 1; done
     fi
     if [ "$st" = STARTED ]; then
       log "a$N: stopping array (cmdStop)"; em_cmd $N cmdStop=Stop >/dev/null
-      for i in $(seq 1 300); do st=$(inst_var $N mdState); md_is_stopped "$st" && break; sleep 1; done
+      while [ $SECONDS -lt $end ]; do st=$(inst_var $N mdState); md_is_stopped "$st" && break; inst_running $N || break; sleep 1; done
       log "a$N: array state after stop: $st"
       md_is_stopped "$st" || { echo "array $N did not stop cleanly (mdState=$st); leaving it running" >&2; return 1; }
     fi
@@ -200,6 +239,7 @@ stop_one() {
     for i in 1 2 3 4 5 6 7 8 9 10; do [ -z "$(inst_pids $N)" ] && break; sleep 1; done
     for p in $(inst_pids $N); do kill -9 $p 2>/dev/null; done
   fi
+  export_own $N
   # drv_unload stops an array the driver still has started (emhttpd started it after the check above)
   drv_unload $N || { echo "array $N: the driver could not stop the array, a disk is still in use; driver left loaded" >&2; return 1; }
   rm -f $RUNROOT/a$N/ns.id; rm -rf $RUNROOT/a$N/state/* $RUNROOT/a$N/run/* 2>/dev/null
@@ -222,6 +262,40 @@ hostfilter() {
     pkill -f "$HOSTDL" 2>/dev/null; true   # running nchan copy restarts on the next page view with the override
   elif [ $mounted = 1 ]; then umount $HOSTDL; log "host Main: device_list override removed"; pkill -f "$HOSTDL" 2>/dev/null; true
   fi
+}
+
+# array 1 is stopping: every instance must be gone before its md driver is reloaded (F15) and before it unmounts.
+# Stops all extra arrays in parallel within the host's shutdown time-out; an array that does not stop in time is
+# ended by force (its file systems go with its namespace, the array is left unclean) and that is reported.
+export_own() {   # pools an ended instance left imported (its emhttpd normally exports them at its stop)
+  local p; for p in $(cat $RUNROOT/a$1/zpools 2>/dev/null); do
+    zpool list -H -o name 2>/dev/null | grep -qx -- "$p" || continue
+    zpool export -f "$p" && log "a$1: exported its pool $p" || log "a$1: could not export its pool $p"; done
+  rm -f $RUNROOT/a$1/zpools
+}
+force_end() {
+  local N=$1 p i
+  for p in $(inst_pids $N); do log "a$N: still held: $(nsenter -t $p -m -- findmnt -rno TARGET,SOURCE 2>/dev/null | grep -E '^/mnt/' | tr '\n' ' ')"; break; done
+  for p in $(inst_pids $N); do kill -9 $p 2>/dev/null; done
+  for i in 1 2 3 4 5 6 7 8 9 10; do [ -z "$(inst_pids $N)" ] && break; sleep 1; done
+  export_own $N
+  drv_unload $N || log "a$N: driver left loaded (a disk still in use); no instance is left to use it"
+  rm -f $RUNROOT/a$N/ns.id
+  mountpoint -q $RUNROOT/cfg$N && umount -l $RUNROOT/cfg$N
+  log "a$N: ENDED BY FORCE: the array did not stop in time and is unclean (expect a parity check at its next start)"
+  /usr/local/emhttp/webGui/scripts/notify -e "Multi Arrays" -s "Array $N did not stop" -d "Array $N did not stop in time while array 1 stopped; it was ended by force and is unclean. See /var/log/multiarray.log." -i alert >/dev/null 2>&1
+  echo "array $N did not stop in time: ended by force (unclean)" >&2
+}
+stop_host() {
+  local to N pids="" rc=0 p
+  to=$(sed -n 's/^shutdownTimeout="\{0,1\}\([0-9]*\).*/\1/p' /boot/config/disk.cfg 2>/dev/null); [ -n "$to" ] || to=90
+  to=$((to - 20)); [ $to -ge 30 ] || to=30
+  log "array 1 stopping: stopping extra arrays (limit ${to}s)"
+  for N in $(seq 2 9); do { inst_running $N || drv_loaded $N; } || continue
+    ( STOP_WAIT=$to stop_one $N || force_end $N ) & pids+="$! "; done
+  for p in $pids; do wait $p || rc=1; done
+  for N in $(seq 2 9); do inst_running $N && { log "a$N: STILL RUNNING after the host stop path"; rc=1; }; done
+  return $rc
 }
 
 targets() { case "$1" in ""|all) seq 2 $ARRAYS ;; *) echo "$1" ;; esac; }
@@ -289,10 +363,12 @@ status_json() {
   done; echo ']'
 }
 
-case "$1" in start|stop) exec 9>$RUNROOT/lock; flock 9 ;; esac
+case "$1" in start|stop) exec 9>$RUNROOT/lock
+  if [ "$1 ${3:-}" = "stop --host" ]; then flock -w 60 9 || log "host stop: lock busy for 60s, stopping anyway"; else flock 9; fi ;; esac
 case "$1" in
   start)   for N in $(targets $2); do start_one $N; done; hostfilter sync ;;
-  stop)    rc=0; for N in $(targets $2 | sort -rn); do stop_one $N || rc=1; done; exit $rc ;;
+  stop)    [ "${3:-}" = --host ] && { stop_host; exit $?; }
+           rc=0; for N in $(targets $2 | sort -rn); do stop_one $N || rc=1; done; exit $rc ;;
   restart) $0 stop $2; $0 start $2 ;;
   status)  for N in $(seq 2 $ARRAYS); do echo "array $N: $(inst_running $N && echo running || echo stopped) mdState=$(inst_var $N mdState) port=$(port_of $N)"; done ;;
   status-json) status_json ;;
@@ -300,8 +376,10 @@ case "$1" in
   refresh) refresh ;;
   setup)   setup ;;
   apply)   apply ;;
+  dmview)  dmview "$2" "$3" "$4" ;;
   hotplug) ( sleep 2; setsid $0 refresh ) >/dev/null 2>&1 </dev/null & ;;   # from the udev rule: return at once, refresh after udev settles
   gen-pages) shift; exec $PLUG/scripts/gen-pages "$@" ;;
   em)      shift; em_cmd "$@" ;;
+  guard)   shift; guard "$@" ;;
   *) echo "usage: $0 start|stop|restart [N|all] | refresh | setup | apply | status | status-json | em N cmd | export N | import plan|apply|start|check ..." >&2; exit 2 ;;
 esac

@@ -2,6 +2,15 @@
 
 Copied by the build from the <CHANGES> block of multiarray.plg; edit the .plg, not this file.
 
+## 2026.11.09h
+- Safety: an extra array can no longer reach array 1's driver. Stopping array 1 reloads its driver, which used to leave a still-running extra array talking to array 1. Extra arrays now start only while array 1 is started, are always gone before array 1 stops, and an extra array that loses its own driver is ended at once instead of sending anything on.
+- Safety: zfs pools stay with their array. Each array mounts, changes and exports only its own pools (before, starting any array mounted every other array's and array 1's zfs pools over its own disks). An array whose zfs pool name is already in use on the server (pool names are server-wide; an array zfs disk is a pool named after its slot, disk1, disk2, ...) is not started or formatted, and the reason is shown.
+- Stopping array 1, rebooting or shutting down no longer waits forever for an extra array that cannot stop. Extra arrays are stopped together within the shutdown time-out; one that does not stop in time is ended (it is then unclean) and a notification says so.
+- Healthy disks of an extra array no longer show "Unmountable" (with Format offered) after its driver was reloaded or after an encrypted btrfs disk was opened, and a disk partitioned after the array's start (a new parity disk) is no longer missing at the next start.
+- Extra arrays no longer keep array 1's disks, user shares and pools busy (array 1 can export its zfs pools while extra arrays run).
+- Each extra array has its own encryption key file; none uses array 1's /root/keyfile. An encrypted extra array asks for its own passphrase.
+- Add Pool, share settings and the mover now work in extra arrays (their flash folder gets pools/ and shares/), and extra arrays log to the syslog.
+- After updating, stop and start each extra array once so it runs with these changes.
 ## 2026.11.08g
 - Fix: stopping an extra array while it was still starting could leave its disks behind in the kernel. Until a reboot, that array's disk1 could then not be mounted, and stopping it again or listing disks (lsblk) caused kernel errors. The driver now stops a started array when it is unloaded and gives up a disk it could not add, and the plugin waits for a start in progress before it stops an array.
 - Updates replace the cached driver files on the flash when the package brings a new build of them.

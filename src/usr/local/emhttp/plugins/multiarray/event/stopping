@@ -3,5 +3,5 @@
 grep -qs '^SERVICE="enable"' /boot/config/plugins/multiarray/multiarray.cfg || ls /var/lib/multiarray/a*/ns.id >/dev/null 2>&1 || exit 0   # not enabled and nothing running: nothing to do
 . /usr/local/emhttp/plugins/multiarray/scripts/lib.sh
 echo "$(date '+%F %T') event stopping" >> $LOG
-$PLUG/scripts/multiarray stop all >>$LOG 2>&1
+$PLUG/scripts/multiarray stop all --host >>$LOG 2>&1 </dev/null
 exit 0

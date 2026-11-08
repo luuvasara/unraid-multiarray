@@ -9,6 +9,7 @@
 #   drv_state N        - print the driver's own mdState (empty when not loaded)
 #   drv_ctl N          - print "<mdcmd path> <mdstat path>" proc entries of this instance
 #   drv_major N        - print the block major used for md<slot>p1 nodes of this instance
+#   drv_disk_prefix N  - print the prefix of the driver's own disk names (mdb for array 2: mdb1p1, ...)
 # the module is staged into RAM (RUNROOT/ko) because /boot/config is re-pointed inside instance namespaces
 drv_ko() { echo $RUNROOT/ko/md_unraid$1.ko; }
 drv_check() {
@@ -38,3 +39,5 @@ drv_unload() {
 }
 drv_ctl() { echo "/proc/mdcmd$1 /proc/mdstat$1"; }
 drv_major() { awk -v n="md$1" '$2==n{print $1}' /proc/devices; }
+# disk node names of instance N's driver: md<letter><slot>p1 (array 2 = mdb, 3 = mdc, ...)
+drv_disk_prefix() { printf "md\\x$(printf %x $((96 + $1)))"; }
