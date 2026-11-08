@@ -25,6 +25,10 @@ function hdr($h, $k) { return preg_match('/^'.$k.'="([^"]*)"/m', $h, $m) ? $m[1]
 $ad = split_page("$DX/ArrayDevices.page");
 $ao = split_page("$DX/ArrayOperation.page");
 $dl = file_get_contents("$DX/nchan/device_list");
+/* while the host filter is bind-mounted over the stock device_list, reading it returns our host override:
+ * undo it so array N's list is built from the stock text (else array N hides the disks pinned to array N) */
+$dl = str_replace(["\nrequire_once '$LIB';", 'ma_filter_devs((array)@parse_ini_file("$varroot/devs.ini",true))'],
+                  ['', '(array)@parse_ini_file("$varroot/devs.ini",true)'], $dl);
 $pl = file_get_contents("$DX/nchan/parity_list");
 
 if ($host) {   /* host Main: stock device_list + pinned-disk filter, bind-mounted over the stock file by 'multiarray hostfilter' */

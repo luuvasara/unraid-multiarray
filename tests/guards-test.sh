@@ -64,4 +64,9 @@ cat > $T/dx/nchan/device_list <<'S'
 S
 MA_TEST_DX=$T/dx MA_TEST_PL=$T/pl MA_TEST_ROOT=$T/gp php $P/scripts/gen-pages 2 >/dev/null 2>$T/gp.err
 ! grep -q '/Main/Browse' $T/pl/nchan/device_list2 && ! grep -q 'Browse' $T/gp.err && grep -q "<a class='view'></a>" $T/pl/nchan/device_list2 && ok "MainN has no Browse link to a host path" || bad "MainN Browse links: $(grep -c /Main/Browse $T/pl/nchan/device_list2) left; $(grep Browse $T/gp.err)"
+# host filter mounted over the stock device_list: array N's copy must come out without it, the host copy with it
+printf '%s\n' 'require_once "$docroot/webGui/include/publish.php";' '$devs   = (array)@parse_ini_file("$varroot/devs.ini",true);' > $T/dx/nchan/device_list
+MA_TEST_DX=$T/dx MA_TEST_PL=$T/pl MA_TEST_ROOT=$T/gp php $P/scripts/gen-pages --host 2>/dev/null; cp $T/gp/host/device_list $T/dx/nchan/device_list
+MA_TEST_DX=$T/dx MA_TEST_PL=$T/pl MA_TEST_ROOT=$T/gp php $P/scripts/gen-pages 2 >/dev/null 2>&1
+grep -q ma_filter_devs $T/dx/nchan/device_list && ! grep -q 'ma_filter_devs\|multiarray/include/lib.php' $T/pl/nchan/device_list2 && ok "array N's device list has no host disk filter, even while it is mounted" || bad "device_list2 carries the host filter"
 [ $f -eq 0 ] && echo "guards tests: all $n passed" || { echo "guards tests: $f failed"; exit 1; }
