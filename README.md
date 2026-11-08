@@ -2,6 +2,9 @@
 
 # unraid-multiarray: more than one Unraid array
 
+> [!CAUTION]
+> **Disclaimer:** Multi Arrays is an independent project, not made or supported by Lime Technology. Neither its author nor Lime Technology takes any responsibility for any results caused by this plugin or its implementation. It is a proof of concept, meant only to show how simple support for multiple arrays could be. If that doesn't sit well with you, wait for the official support for multiple arrays in Unraid.
+
 Run several independent parity-protected arrays on one Unraid server (default: three), each with
 its own Main tab: Main, Main2, Main3.
 
@@ -11,8 +14,6 @@ its own Main tab: Main, Main2, Main3.
 > Use a test machine or a VM with disks you don't care about.
 >
 > The webGUI side of this is proposed upstream in [unraid/webgui#2813](https://github.com/unraid/webgui/pull/2813).
-
-> **Disclaimer:** Multi Arrays is an independent project, not made or supported by Lime Technology. Neither its author nor Lime Technology takes any responsibility for any results caused by this plugin or its implementation. It is a proof of concept, meant only to show how simple support for multiple arrays could be. If that doesn't sit well with you, wait for the official support for multiple arrays in Unraid.
 
 ## It is simpler than it sounds
 
@@ -86,3 +87,7 @@ Not yet:
 ## License
 
 GPL-2.0, see LICENSE.
+
+## Disclaimer
+
+Multi Arrays is an independent project, not made or supported by Lime Technology. Neither its author nor Lime Technology takes any responsibility for any results caused by this plugin or its implementation. It is a proof of concept, meant only to show how simple support for multiple arrays could be. If that doesn't sit well with you, wait for the official support for multiple arrays in Unraid.
