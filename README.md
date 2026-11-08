@@ -62,6 +62,27 @@ picked up automatically.
 - CLI: `/usr/local/emhttp/plugins/multiarray/scripts/multiarray start|stop|status|refresh [N|all]`
 - Log: `/var/log/multiarray.log`
 
+## Disks
+
+Settings › Multi Arrays › Disks lists every disk of the server, grouped by where it belongs: each array in slot order,
+each pool, the unassigned disks and the ones that can't be used (the flash, mounted disks). For each disk: slot, device,
+size, model, serial, temperature and SMART health (as Unraid last read them; a sleeping disk is not woken), controller,
+port and, in a known enclosure, the bay. *Details* shows every name the disk goes by (md devices, mapper, by-id,
+by-path, WWN, file system UUID, btrfs devid, zfs guid). The search box takes any of those names, a bay or a whole log
+line and marks every disk it can mean. *Locate* reads one disk for 20 seconds so its activity light flashes (read only,
+cancellable, and it asks first when the disk is asleep).
+
+- **Enclosures**: a QNAP TL-D1600S (QXP-1600eS card) is drawn as its front panel with the bays filled in. The bay
+  order inside each cable group is measured; which cable feeds which group depends on how the unit is cabled, so the
+  page asks you to confirm it with Locate and lets you correct it.
+- **Found arrays**: a read-only check of the free disks. For each it reports evidence: the partition table and where
+  partition 1 starts, the file system signature (type, UUID, label; for btrfs also devices, devid and generation) and,
+  for a disk without a file system, whether it is blank. From that it suggests which disks may form an array, with
+  the parity candidate, and says what can't be known: the slot order is recorded only on the old flash, not on the
+  disks. An optional check compares the parity candidate with the XOR of the data disks at up to 10 places. It never
+  mounts, never writes and never assigns; you decide the mapping. *Prepare import* turns your choice into an import
+  plan for the Export and import tab.
+
 ## Export and import an array
 
 Settings › Multi Arrays › Export and import moves a whole array to another server, or onto this one as an extra array.
@@ -77,6 +98,8 @@ Settings › Multi Arrays › Export and import moves a whole array to another s
   serial number and size. The plan is shown first and nothing changes before you confirm; the assignments go through
   Unraid's own commands, the same ones the Main page sends. Then the array can be started with "Parity is already
   valid" and checked with a read-only parity check. Import never formats a disk and never starts a parity sync.
+  A plan made on the Disks tab from what is on the disks (no export file) is imported the same way; it is marked as
+  detected, and the page follows the read-only check and explains what errors would mean and what the choices are.
 
 ## Status
 
@@ -95,8 +118,8 @@ Not yet:
 
 - `src/`: package root (extracted to `/`)
 - `build.sh`: builds `packages/multiarray-<version>-x86_64-1.txz` with `kit/bin/build.sh`, writes its MD5 into `multiarray.plg` and `CHANGELOG.md` from the `.plg`'s `<CHANGES>` (bump the version in the `.plg` on every change)
-- `tests/run-tests.sh`: lint, the `.plg` and package checks and the export/import unit tests (`tests/xport-test.php`); `tests/render-test.sh` renders the About tab in headless Chrome
-- `kit/`: the shared plugin kit (build, lint, About tab)
+- `tests/run-tests.sh`: lint, the `.plg` and package checks and the unit tests (`tests/xport-test.php`, `tests/disks-test.php`); `tests/render-test.sh` renders the About and Disks tabs in headless Chrome
+- `kit/`: the shared plugin kit (build, lint, About tab, drive map, enclosure profiles)
 - `driver/md_unraid2.patch`: the change to Unraid's md driver that lets a numbered copy run next to the original
 - `build/build-ko.sh KERNEL_TREE MD_SOURCE_DIR N...`: build the driver copies `ko/<kernel>/md_unraidN.ko` for a kernel
 - `ko/`: prebuilt drivers, currently for 6.18.58-Unraid (Unraid 7.3.4); the plugin downloads the ones matching the running kernel

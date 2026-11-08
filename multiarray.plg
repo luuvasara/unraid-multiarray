@@ -2,14 +2,21 @@
 <!DOCTYPE PLUGIN [
 <!ENTITY name    "multiarray">
 <!ENTITY author  "Multi Arrays project">
-<!ENTITY version "2026.11.08d">
+<!ENTITY version "2026.11.08f">
 <!ENTITY source  "https://raw.githubusercontent.com/luuvasara/unraid-multiarray/main">
 <!ENTITY base    "/boot/config/plugins/&name;">
-<!ENTITY md5     "87b281b04772a999b0a51918bf61d009">
+<!ENTITY md5     "c554bd85b6c2b5a865e0e9e26b4c4331">
 ]>
 <PLUGIN name="&name;" author="&author;" version="&version;" min="7.3.0" icon="server" launch="Settings/MultiArray" pluginURL="&source;/&name;.plg" support="https://github.com/luuvasara/unraid-multiarray/issues">
 
 <CHANGES>
+###2026.11.08f
+- New Disks tab (Settings, Multi Arrays, Disks): every disk grouped by where it belongs (each array in slot order, pools, unassigned, not usable), with size, model, serial, temperature and SMART health as Unraid last read them (a sleeping disk is not woken), controller, port and enclosure bay. Details shows every name a disk goes by; the search box marks every disk a name, a bay or a log line can mean.
+- Locate: reads one disk for 20 seconds so its activity light flashes. Read only, one disk at a time, cancellable; it asks first when the disk is asleep.
+- QNAP TL-D1600S enclosures are drawn as their front panel with the bays filled in. Confirm the cabling with Locate, or correct it on the page.
+- SSDs in an array get a warning on the Disks tab, in found arrays and in Prepare import: SSDs are strongly not recommended as array disks (no TRIM in an array, and parity may suffer).
+- Found arrays: a read-only check of the free disks reports evidence (partition table and start, file system signature, whether a disk is blank, optionally parity against the XOR of the data disks) and suggests which disks may form an array. It never mounts, writes or assigns; you decide. Prepare import turns your choice into a plan for the Export and import tab, which follows the read-only parity check and explains the result.
+- Removing the plugin is silent when extra arrays were never enabled.
 ###2026.11.08d
 - Export and import of a whole array (Settings, Multi Arrays, Export and import; or multiarray export N in a terminal). Export writes a file with every slot's disk as Unraid identifies it (id, serial number, size), the partition layout, file system and encryption UUIDs and the array's settings; never keys, passphrases or files. It works without enabling extra arrays and only reads. It refuses an array that is not clean and an array on a VM's virtual disks, and says why.
 - Import puts the disks of an exported array into the same slots, as an extra array or as the main array of a fresh server. Each slot needs exactly one free disk with the same serial number and size; the plan is shown and nothing changes before you confirm. The assignments go through Unraid's own commands. Then the array can be started with parity already valid and checked read-only.
@@ -72,8 +79,15 @@ exit 0
 <!-- 3. removal: stop the extra arrays cleanly first; arrayN config (incl. superblocks) is KEPT on the flash -->
 <FILE Run="/bin/bash" Method="remove">
 <INLINE>
-/usr/local/emhttp/plugins/&name;/scripts/multiarray stop all
-/usr/local/emhttp/plugins/&name;/scripts/multiarray hostfilter off
+# only when extra arrays ever ran since boot (/var/lib/multiarray) or are enabled: otherwise there is nothing to stop
+if [ -d /var/lib/multiarray ] || grep -qs '^SERVICE="enable"' &base;/multiarray.cfg; then
+  /usr/local/emhttp/plugins/&name;/scripts/multiarray stop all
+  /usr/local/emhttp/plugins/&name;/scripts/multiarray hostfilter off
+fi
+# a Locate read still running (Disks tab) ends with the plugin
+for j in /var/run/&name;/locate.json /var/run/&name;/disks-job.json; do
+  p=$(sed -n 's/.*"pid":\([0-9]*\).*/\1/p' "$j" 2&gt;/dev/null); [ -n "$p" ] &amp;&amp; kill "$p" 2&gt;/dev/null
+done
 removepkg &base;/&name;-*.txz
 udevadm control --reload 2&gt;/dev/null
 rm -f &base;/&name;-*.txz

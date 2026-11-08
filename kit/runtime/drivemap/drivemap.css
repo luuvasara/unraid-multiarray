@@ -1,0 +1,12 @@
+/* Drives tab. Unraid's own table and form styles; nothing here sets a text or page color, so all four themes work. */
+.dm .dm-intro { margin: 0 0 12px; }
+.dm .dm-find { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 0 0 8px; }
+.dm .dm-find input[type=text] { flex: 1 1 320px; max-width: 640px; margin: 0; }
+.dm .dm-find input[type=submit] { margin: 0; }
+.dm .dm-result { min-height: 1.5em; margin: 0 0 12px; }
+.dm .dm-result p { margin: 2px 0; font-family: monospace; }
+.dm .dm-error { font-weight: bold; }
+.dm .dm-table td { vertical-align: top; }
+.dm .dm-names td { font-family: monospace; font-size: 0.9em; word-break: break-all; }
+.dm tr.dm-hit { outline: 2px solid currentColor; outline-offset: -2px; }
+.dm .dm-more { margin: 0; padding: 2px 8px; }

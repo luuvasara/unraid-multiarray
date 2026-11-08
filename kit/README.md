@@ -10,7 +10,9 @@ The shared build, test and About tab of these Unraid plugins. A plugin repositor
 | `bin/kit-sync` | Copies the kit into a plugin repository and records the commit in `kit/KIT-VERSION` |
 | `bin/changes-from-plg.sh` | The `.plg`'s `<CHANGES>` as plain text, the one source of the release notes |
 | `runtime/` | Goes into the package: About tab, install message, changes parser |
-| `render/` | Pages rendered with Unraid's real stylesheets in headless Chrome, on a workstation |
+| `runtime/drivemap/` | Goes into the package: the drive map library (`DriveMap.php`), its endpoint, and the Drives tab when `DRIVEMAP=yes` |
+| `runtime/drivemap/Enclosure.php`, `enclosures/` | Goes into the package: enclosure profiles (which bay a drive sits in, from its PCI path and port) and the library that reads them |
+| `render/` | Pages rendered with Unraid's real stylesheets in headless Chrome, on a workstation; made-up servers for them (`drivemap-fixture.php`, `enclosure-fixture.php`) |
 | `tests/kit-test.sh` | Builds a throwaway plugin and checks the result |
 | `docs/STANDARD.md` | What a plugin of this family has to do |
 

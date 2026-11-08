@@ -105,7 +105,7 @@ function ma_x_devinfo($ctx, $dev) {
     'vendor'  => trim((string)(ma_x_read("$s/device/vendor") ?? '')),
     'rotational' => (int)ma_x_read("$s/queue/rotational"),
     'partition'  => is_dir("$s/$part") ? ['name' => $part, 'start' => (int)ma_x_read("$s/$part/start"), 'size' => (int)ma_x_read("$s/$part/size")] : null,
-    'holders' => array_values(array_diff(array_merge((array)@scandir("$s/holders"), (array)@scandir("$s/$part/holders")), ['.', '..'])),
+    'holders' => array_values(array_diff(array_merge(@scandir("$s/holders") ?: [], @scandir("$s/$part/holders") ?: []), ['.', '..'])),   // (array)false would be [false]
     'sysfs_path' => $real,
     'drivers' => $drivers,
     'by_id'   => $byid,
@@ -479,4 +479,15 @@ function ma_x_check($target, $ctx = null) {
   $ok = ma_x_wait(fn() => (int)(ma_x_ini($tp['state'].'/var.ini')['mdResyncPos'] ?? 0) > 0 || (int)(ma_x_ini($tp['state'].'/var.ini')['mdResync'] ?? 0) > 0, 20);
   $v = ma_x_ini($tp['state'].'/var.ini');
   return ['ok' => $ok, 'error' => $ok ? null : 'the check did not start', 'action' => $v['mdResyncAction'] ?? '', 'corr' => $v['mdResyncCorr'] ?? '', 'http' => $st];
+}
+
+/* the running or last parity check of array N, from its var.ini: percent, errors (sbSyncErrs: so far, then found), exit code */
+function ma_x_check_status($target, $ctx = null) {
+  $ctx = $ctx ?: ma_x_ctx(); $target = (int)$target;
+  if ($target < 1 || $target > 9 || !ma_x_instance_up($ctx, $target)) return ['ok' => false, 'error' => "array $target is not running"];
+  $v = ma_x_ini(ma_x_paths($ctx, $target)['state'].'/var.ini');
+  $pos = (int)($v['mdResyncPos'] ?? 0); $size = (int)($v['mdResyncSize'] ?? 0);
+  $running = $pos > 0;
+  return ['ok' => true, 'running' => $running, 'percent' => $running && $size > 0 ? round(100 * $pos / $size, 1) : 100,
+          'errors' => (int)($v['sbSyncErrs'] ?? 0), 'exit' => (int)($v['sbSyncExit'] ?? 0), 'action' => (string)($v['mdResyncAction'] ?? '')];
 }

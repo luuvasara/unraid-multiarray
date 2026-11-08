@@ -1,0 +1,23 @@
+{
+  "id": "qnap-tl-d1600s",
+  "name": "QNAP TL-D1600S",
+  "card": "QXP-1600eS",
+  "source": "QNAP TL-D400S/D800S/D1600S user guide (tl-dx00s-ug-04-en.pdf): rear SFF port 1 = HDD1-4, port 2 = HDD5-8, port 3 = HDD9-12, port 4 = SSD1-4; front bottom row HDD1..HDD8 left to right, top row HDD9..HDD12 then SSD1..SSD4",
+  "match": { "switch": "1b21:2824", "controller": "1b21:1164", "controllers": 4, "ports_per_controller": 4 },
+  "groups": {
+    "1": ["HDD1", "HDD2", "HDD3", "HDD4"],
+    "2": ["HDD5", "HDD6", "HDD7", "HDD8"],
+    "3": ["HDD9", "HDD10", "HDD11", "HDD12"],
+    "4": ["SSD1", "SSD2", "SSD3", "SSD4"]
+  },
+  "front": [
+    ["HDD9", "HDD10", "HDD11", "HDD12", "SSD1", "SSD2", "SSD3", "SSD4"],
+    ["HDD1", "HDD2", "HDD3", "HDD4", "HDD5", "HDD6", "HDD7", "HDD8"]
+  ],
+  "calibration": {
+    "note": "Measured 2026-11-08 on one unit with a blink test (each disk read for 20 s, the LEDs read at the front; all 16 bays consistent). port_to_position is a fact of the card: each ASM1164 serves one group of four bays in reverse port order, its port 1 (lowest ata port) = the highest bay of the group. card_port_to_group depends on how the four cables are plugged between card and enclosure: this list is the measured unit's cabling, for the card's controllers in PCI address order (there 03:00.0 = HDD9-12, 04:00.0 = SSD1-4, 05:00.0 = HDD1-4, 06:00.0 = HDD5-8). On another unit it is a default until confirmed with Locate; a plugin passes the confirmed cabling of a unit as the 'cabling' option.",
+    "port_to_position": [4, 3, 2, 1],
+    "card_port_to_group": [3, 4, 1, 2],
+    "card_port_to_group_default": true
+  }
+}

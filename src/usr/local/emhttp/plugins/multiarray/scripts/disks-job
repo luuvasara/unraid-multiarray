@@ -1,0 +1,23 @@
+#!/usr/bin/php
+<?php
+/* disks-job detect | parity PARITYDEV DATADEV... : the read-only checks of the Disks tab, run in the background.
+ * Writes its state and result to /var/run/multiarray/disks-job.json (RAM). Never writes to a disk, never mounts.
+ * From a terminal: disks-job detect; cat /var/run/multiarray/disks-job.json */
+require_once '/usr/local/emhttp/plugins/multiarray/include/disks.php';
+$kind = $argv[1] ?? '';
+$f = ma_d_job_file();
+$base = ['state' => 'running', 'kind' => $kind, 'started' => time(), 'pid' => getmypid(), 'done' => 0, 'total' => 0, 'device' => ''];
+$put = function ($a) use ($f) { @mkdir(dirname($f), 0755, true); file_put_contents("$f.new", json_encode($a, JSON_UNESCAPED_SLASHES | JSON_INVALID_UTF8_SUBSTITUTE)); rename("$f.new", $f); };
+$put($base);
+try {
+  if ($kind === 'detect') {
+    $r = ma_d_detect(null, true, function ($done, $total, $dev) use ($put, $base) { $put(['done' => $done, 'total' => $total, 'device' => $dev] + $base); });
+  } elseif ($kind === 'parity') {
+    $r = ma_d_parity_check((string)($argv[2] ?? ''), array_slice($argv, 3));
+  } else $r = ['ok' => false, 'error' => 'unknown job'];
+  $put(['state' => 'done', 'finished' => time(), 'result' => $r] + $base);
+  if ($kind === 'detect') file_put_contents(ma_d_last_detect_file(), json_encode($r, JSON_UNESCAPED_SLASHES | JSON_INVALID_UTF8_SUBSTITUTE));
+} catch (Throwable $e) {
+  $put(['state' => 'failed', 'error' => $e->getMessage()] + $base);
+  exit(1);
+}

@@ -42,6 +42,12 @@ pinned to another array, not mounted. The plan is shown first and nothing is cha
 assignments are made through Unraid's own commands, the same ones the Main page sends. Import never formats a disk and
 never starts a parity sync.</p>
 <dl><dt>Export file:</dt><dd><input type="file" id="ma-x-file" accept=".json,application/json"></dd></dl>
+<div id="ma-x-detected" class="ma-msg" hidden>
+<p><strong>Using a plan made on the Disks tab from what is on the disks (detected, not exported).</strong> The slots are
+the ones you chose there; the disks do not record the old order. Import it like an export file: show the plan, confirm,
+start with parity already valid, then run the read-only check, which tells whether parity matches these disks in these
+slots.</p>
+</div>
 <dl><dt>Import as:</dt><dd><select id="ma-x-dst"></select>
 <input type="button" id="ma-x-plan" value="Show the plan" disabled></dd></dl>
 <div id="ma-x-planbox" class="ma-msg"></div>
@@ -51,9 +57,12 @@ never starts a parity sync.</p>
 </div>
 <div id="ma-x-result" class="ma-msg"></div>
 <div id="ma-x-startbox" hidden>
-<p>Next: start the array with <em>Parity is already valid</em>, as the Main page does for a new array whose parity is
+<p id="ma-x-start-exported">Next: start the array with <em>Parity is already valid</em>, as the Main page does for a new array whose parity is
 known to be good. With dual parity this is right only because every disk is in its original slot, which the import
 made sure of. Nothing is written to parity.</p>
+<p id="ma-x-start-detected" hidden>Next: start the array with <em>Parity is already valid</em>. Nothing is written to parity. For a detected
+plan this is an assumption, not a fact: single parity stays valid whatever the data order; parity 2 only if every data
+disk is in its old slot. The read-only check that follows is what tells.</p>
 <p><label><input type="checkbox" id="ma-x-startyes"> Yes, start it with parity already valid.</label>
 <input type="button" id="ma-x-start" value="Start array" disabled></p>
 </div>
@@ -61,6 +70,7 @@ made sure of. Nothing is written to parity.</p>
 <p>Recommended: a read-only parity check. It reads every disk and counts errors, but writes no corrections. 0 errors
 confirms the import.</p>
 <p><input type="button" id="ma-x-check" value="Start read-only parity check"></p>
+<div id="ma-x-checkres" class="ma-msg" role="status" aria-live="polite"></div>
 </div>
 </div>
 
@@ -70,6 +80,7 @@ confirms the import.</p>
   function name(n){return n==1?'Array 1 (main array)':'Array '+n;}
   function line(box,cls,text){$('<div>').addClass(cls||'').text(text).appendTo(box);}
   function list(box,items,cls){var ul=$('<ul>').appendTo(box);(items||[]).forEach(function(x){$('<li>').addClass(cls||'').text(x).appendTo(ul);});}
+  function noTarget(){ $('#ma-x-plan').prop('disabled',true); line($('#ma-x-planbox').empty(),'','No array here can take an import now: the target must be stopped and empty (an extra array with no disks assigned or pinned, or the main array of a fresh server).'); }
   function arrays(){
     $.getJSON(url,{action:'arrays'},function(d){
       var s=$('#ma-x-src').empty(), t=$('#ma-x-dst').empty();
@@ -77,7 +88,7 @@ confirms the import.</p>
         $('<option>').val(a.n).text(name(a.n)+(a.up?' - '+(a.fsState||a.mdState||''):' - not running')).prop('disabled',!a.up).appendTo(s);
         $('<option>').val(a.n).text(name(a.n)+(a.importable?' - stopped, empty':' - not available: '+a.why)).prop('disabled',!a.importable).appendTo(t);
       });
-      if (!t.find('option:enabled').length) { $('#ma-x-plan').prop('disabled',true); line($('#ma-x-planbox').empty(),'','No array here can take an import now: the target must be stopped and empty (an extra array with no disks assigned or pinned, or the main array of a fresh server).'); }
+      if (!t.find('option:enabled').length) noTarget();
       else t.val(t.find('option:enabled').first().val());
       if (!d.service) line($('#ma-x-exmsg').empty(),'','Extra arrays are not enabled on this server: export works for the main array, and import only into a fresh main array.');
     });
@@ -98,7 +109,16 @@ confirms the import.</p>
       });
     }).catch(function(){box.empty(); line(box,'ma-bad','Export failed: no answer from the server.');});
   });
+  var detected=false;
+  /* the Disks tab hands over a plan made from what is on the disks (export format, "detected": true) */
+  window.maXportDetected=function(json){
+    file=json; detected=true; plan=null; $('#ma-x-file').val('');
+    $('#ma-x-planbox,#ma-x-result').empty(); $('#ma-x-confirmbox,#ma-x-startbox,#ma-x-checkbox').prop('hidden',true);
+    $('#ma-x-detected').prop('hidden',false);
+    if (!$('#ma-x-dst option:enabled').length) noTarget(); else $('#ma-x-plan').prop('disabled',false);
+  };
   $('#ma-x-file').on('change',function(){
+    detected=false; $('#ma-x-detected').prop('hidden',true);
     file=null; plan=null; $('#ma-x-planbox,#ma-x-result').empty(); $('#ma-x-confirmbox,#ma-x-startbox,#ma-x-checkbox').prop('hidden',true);
     var f=this.files[0]; if(!f) return;
     var rd=new FileReader(); rd.onload=function(){file=rd.result; $('#ma-x-plan').prop('disabled',!$('#ma-x-dst option:enabled').length);}; rd.readAsText(f);
@@ -120,7 +140,7 @@ confirms the import.</p>
           else $('<div class="ma-bad">').text(r.problem).appendTo(c);
         });
       }
-      if (p.warnings&&p.warnings.length){line(box,'ma-warn','Warnings recorded at export:'); list(box,p.warnings,'ma-warn');}
+      if (p.warnings&&p.warnings.length){line(box,'ma-warn',detected?'Notes from the detection:':'Warnings recorded at export:'); list(box,p.warnings,'ma-warn');}
       if (!p.ok){line(box,'ma-bad','Nothing can be imported:'); list(box,p.problems,'ma-bad'); return;}
       if (p.encrypted) line(box,'ma-warn','The array is encrypted: after the import, start it from its Main tab with its passphrase and "Parity is already valid".');
       line(box,'ma-good','Every slot has exactly one matching free disk. Nothing has been changed yet.');
@@ -136,6 +156,7 @@ confirms the import.</p>
       box.empty(); list(box,r.log);
       if (!r.ok){line(box,'ma-bad',r.error); return;}
       line(box,'ma-good','All slots assigned. Array '+plan.target+' state: '+r.mdState+'.');
+      $('#ma-x-start-exported').prop('hidden',detected); $('#ma-x-start-detected').prop('hidden',!detected);
       if (!plan.encrypted && r.mdState=='NEW_ARRAY') $('#ma-x-startbox').prop('hidden',false);
       else line(box,'','Start it from its Main tab.');
     },'json').fail(function(){box.empty(); line(box,'ma-bad','No answer from the server; check the Main tab of array '+plan.target+'.');});
@@ -151,9 +172,29 @@ confirms the import.</p>
   $('#ma-x-check').on('click',function(){
     var box=$('#ma-x-result'); $(this).prop('disabled',true);
     $.post(url,{action:'check',target:plan.target,csrf_token:csrf},function(r){
-      line(box,r.ok?'ma-good':'ma-bad',r.ok?'Read-only parity check started; follow it on the Main tab of array '+plan.target+'.':r.error);
+      line(box,r.ok?'ma-good':'ma-bad',r.ok?'Read-only parity check started; follow it on the Main tab of array '+plan.target+'. The result is shown here when it ends.':r.error);
+      if (r.ok) checkWatch(plan.target);
     },'json');
   });
+  /* follow the read-only check and say what its result means; nothing is done automatically */
+  function checkWatch(n){
+    var out=$('#ma-x-checkres');
+    var t=setInterval(function(){
+      $.getJSON(url,{action:'checkstatus',target:n},function(c){
+        if (!c.ok) return;
+        if (c.running){ out.empty(); line(out,'','Check running: '+c.percent+'% done, '+c.errors+' errors so far.'); return; }
+        clearInterval(t); out.empty();
+        if (c.exit!==0){ line(out,'ma-warn','The check did not finish (exit code '+c.exit+'). Run it again from the Main tab of array '+n+'.'); return; }
+        if (c.errors===0){ line(out,'ma-good','Check finished: 0 errors. Parity matches these disks in these slots.'); return; }
+        line(out,'ma-bad','Check finished with '+c.errors+' errors: the old parity does not match these disks in these slots.');
+        list(out,['The data disks are untouched: a read-only check writes nothing.',
+          'Possible reasons: a disk of the old array is missing or one too many is assigned, the parity disk is not this array\'s, parity was not in sync when the array was last used, or (with parity 2) the data disks are not in their old slots.',
+          'Choice 1: rebuild parity for these disks: run a parity check with "Write corrections to parity" ticked on the Main tab of array '+n+'. Parity is then valid for these disks as assigned; the old parity is gone.',
+          'Choice 2: stop here: stop the array on its Main tab, check the assignments (or the cables), and import again.',
+          'Nothing happens until you choose.']);
+      });
+    },10000);
+  }
   arrays();
 })();
 </script>

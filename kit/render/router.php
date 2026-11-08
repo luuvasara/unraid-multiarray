@@ -10,6 +10,7 @@ $plugin = getenv('PLUGIN');
 $plug = "$webroot/plugins/$plugin";
 $uri = parse_url($_SERVER['REQUEST_URI'], PHP_URL_PATH);
 if (preg_match('~^/plugins/' . preg_quote($plugin, '~') . '/include/([a-z0-9_-]+)\.php$~i', $uri, $m)) { require "$plug/include/{$m[1]}.php"; return true; }
+if ($uri === "/plugins/$plugin/kit/drivemap.php") { require "$plug/kit/drivemap.php"; return true; }   // the Drives tab's endpoint; DRIVEMAP_ROOT is the server it reads
 if (strpos($uri, '/plugins/') === 0 || strpos($uri, '/webGui/') === 0) return false;
 $docroot = $webroot;
 $var = ['csrf_token' => 'TESTTOKEN'];

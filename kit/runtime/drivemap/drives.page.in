@@ -1,0 +1,66 @@
+Menu="@@PARENT@@:@@DRIVEMAP_ORDER@@"
+Title="Drives"
+Tag="hdd-o"
+Markdown="false"
+---
+<?php
+/* Drives: made by the build from the plugin kit. Every drive with the names it goes by, from DriveMap. The table is drawn
+ * here; the search box asks kit/drivemap.php (POST, Unraid checks the token) and draws the answer with textContent. */
+$dm_slug = '@@NAME@@';
+$dm_root = ($docroot ?? '/usr/local/emhttp') . "/plugins/$dm_slug/kit";
+require_once "$dm_root/DriveMap.php";
+$dm_h = function ($s) { return htmlspecialchars((string)$s, ENT_QUOTES, 'UTF-8'); };
+$dm_size = function ($b) {
+  if ($b <= 0) return '';
+  foreach (['TB' => 1e12, 'GB' => 1e9, 'MB' => 1e6] as $u => $f) if ($b >= $f) return rtrim(rtrim(number_format($b / $f, 1, '.', ''), '0'), '.') . " $u";
+  return "$b B";
+};
+$dm_port = function ($d) {
+  if ($d['nvme'] !== '') return $d['nvme'];
+  if ($d['ata'] !== '') return $d['ata'];
+  if ($d['sas_port'] !== '') return "{$d['scsi_host']} {$d['sas_port']}";
+  if ($d['usb'] !== '') return "usb {$d['usb']}";
+  return $d['hctl'];
+};
+$dm_drives = DriveMap::shared()->drives();
+$dm_rank = ['Parity' => 0, 'Data' => 1, 'Cache' => 2, 'Flash' => 3, 'Unassigned' => 4, '' => 5];
+usort($dm_drives, function ($a, $b) use ($dm_rank) {
+  return (($dm_rank[$a['slot_type']] ?? 5) <=> ($dm_rank[$b['slot_type']] ?? 5)) ?: strcmp($a['pool'], $b['pool'])
+    ?: strnatcmp($a['slot'], $b['slot']) ?: strnatcmp($a['device'], $b['device']);
+});
+$dm_v = substr(md5((string)@md5_file("$dm_root/drivemap.js") . @md5_file("$dm_root/drivemap.css")), 0, 10);
+?>
+<link rel="stylesheet" href="/plugins/<?=$dm_slug?>/kit/drivemap.css?v=<?=$dm_v?>">
+<div class="dm" id="dm-<?=$dm_slug?>" data-endpoint="/plugins/<?=$dm_slug?>/kit/drivemap.php">
+<p class="dm-intro">Every drive with the names it goes by: the Unraid slot, the kernel's names and ports, the serial and the file system ids. Paste a name or a whole log line to find the drive it means.</p>
+<form class="dm-find" data-dm="form" autocomplete="off">
+  <label for="dm-q-<?=$dm_slug?>">Find a drive</label>
+  <input type="text" id="dm-q-<?=$dm_slug?>" data-dm="q" placeholder="ex. ata7, devid 2, sdk1, a serial, or a log line" maxlength="2000">
+  <input type="submit" value="Find">
+</form>
+<div class="dm-result" data-dm="result" role="status" aria-live="polite"></div>
+<table class="unraid dm-table">
+  <thead><tr><th>Slot</th><th>Pool</th><th>Device</th><th>Port</th><th>Model</th><th>Serial</th><th>Size</th><th>File system</th><th></th></tr></thead>
+  <tbody>
+<?php foreach ($dm_drives as $dm_i => $d):
+  $dm_fs = $d['fs'];
+  if ($d['btrfs']) $dm_fs = "btrfs, devid {$d['btrfs']['devid']}";
+  if ($d['zfs']) $dm_fs = "zfs {$d['zfs']['pool']}";
+  if ($d['encrypted']) $dm_fs = $dm_fs === '' ? 'encrypted' : "$dm_fs, encrypted";
+  $dm_names = array_values(array_unique(array_filter(array_merge(
+    [$d['unraid_id'], $d['wwn'], $d['hctl'], $d['pci'] !== '' ? "pci {$d['pci']}" : ''], $d['partitions'], $d['md'], $d['mapper'], $d['by_id'], $d['by_path'],
+    [$d['btrfs'] ? "btrfs fsid {$d['btrfs']['fsid']}" : '', $d['zfs'] ? "zfs guid {$d['zfs']['guid']}" : '', $d['fs_uuid'] !== '' ? "uuid {$d['fs_uuid']}" : '']))));
+?>
+    <tr data-dm-key="<?=$dm_h($d['key'])?>">
+      <td><?=$dm_h($d['slot'] !== '' ? $d['slot'] : '-')?></td><td><?=$dm_h($d['pool'])?></td><td><?=$dm_h($d['device'])?></td>
+      <td><?=$dm_h($dm_port($d))?></td><td><?=$dm_h($d['model'])?></td><td><?=$dm_h($d['serial'])?></td>
+      <td><?=$dm_h($dm_size($d['size']))?></td><td><?=$dm_h($dm_fs)?></td>
+      <td><button type="button" class="dm-more" aria-expanded="false" aria-controls="dm-names-<?=$dm_slug?>-<?=$dm_i?>">All names</button></td>
+    </tr>
+    <tr class="dm-names" id="dm-names-<?=$dm_slug?>-<?=$dm_i?>" hidden><td colspan="9"><?=$dm_h(implode('  ·  ', $dm_names))?></td></tr>
+<?php endforeach; ?>
+  </tbody>
+</table>
+<?php if (!$dm_drives): ?><p class="dm-empty">No drives found.</p><?php endif; ?>
+</div>
+<script src="/plugins/<?=$dm_slug?>/kit/drivemap.js?v=<?=$dm_v?>"></script>

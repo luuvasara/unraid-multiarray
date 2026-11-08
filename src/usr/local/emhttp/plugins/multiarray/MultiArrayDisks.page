@@ -1,0 +1,118 @@
+Menu="MultiArray:1"
+Title="Disks"
+Tag="hdd-o"
+Markdown="false"
+---
+<?PHP
+/* Disks: every physical disk grouped by where it belongs, with every name it goes by (the kit's drive map), temperature
+ * and SMART health from Unraid's own state files (no disk is woken for them), controller, port and enclosure bay.
+ * Found arrays: what is on the free disks, read-only, with an import plan for the Export and import tab.
+ * Logic: include/disks.php; endpoint: include/disks-ajax.php. Everything sent back is drawn with textContent. */
+require_once ($docroot ?? '/usr/local/emhttp').'/plugins/multiarray/include/disks.php';
+$mad = ma_d_inventory();
+$mad_h = function ($s) { return htmlspecialchars((string)$s, ENT_QUOTES, 'UTF-8'); };
+$mad_cls = ['healthy' => 'green-text', 'error' => 'orange-text', 'failed' => 'red-text'];   /* the dashboard's colours, on the icon only: the text keeps the theme's colour */
+$mad_icon = ['healthy' => 'fa-thumbs-o-up', 'error' => 'fa-thumbs-o-down', 'failed' => 'fa-thumbs-o-down'];
+$mad_keyrow = [];
+?>
+<style>
+.ma-d p,.ma-d li{max-width:62em}
+.ma-d .ma-d-find{display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin:0 0 8px}
+.ma-d .ma-d-find input[type=text]{flex:1 1 320px;max-width:640px;margin:0}
+.ma-d .ma-d-find input[type=submit]{margin:0}
+.ma-d .ma-d-msg{min-height:1.5em;margin:4px 0 12px;max-width:62em}
+.ma-d .ma-d-scroll{overflow-x:auto;margin:0 0 16px}
+.ma-d table.ma-d-t{width:100%;margin:0}
+.ma-d table.ma-d-t td{vertical-align:top}
+.ma-d table.ma-d-t td.ma-d-act{white-space:nowrap;text-align:right}
+.ma-d table.ma-d-t td.ma-d-act input{margin:0 0 0 4px;padding:2px 8px}
+.ma-d tr.ma-d-hit{outline:2px solid currentColor;outline-offset:-2px}
+.ma-d tr.ma-d-names td{font-family:monospace;font-size:.9em;word-break:break-all}
+.ma-d dl.ma-d-nl{display:grid;grid-template-columns:max-content 1fr;gap:2px 16px;margin:4px 0}
+.ma-d dl.ma-d-nl dt,.ma-d dl.ma-d-nl dd{margin:0;padding:0;width:auto;float:none;text-align:left}
+.ma-d dl.ma-d-nl dt{font-weight:bold}
+.ma-d .ma-d-grid{display:grid;grid-template-columns:repeat(8,minmax(7em,1fr));gap:4px;max-width:72em;margin:8px 0}
+.ma-d .ma-d-bay{border:1px solid;padding:6px;min-height:3.6em;font-size:.9em}
+.ma-d .ma-d-bay b{display:block}
+.ma-d .ma-d-bay.ma-d-empty{border-style:dashed}
+.ma-d table.ma-d-found{width:auto;margin:6px 0}
+.ma-d table.ma-d-found td,.ma-d table.ma-d-found th{padding:3px 14px 3px 0;text-align:left;vertical-align:top}
+.ma-d .ma-d-found-box{margin:0 0 20px}
+.ma-d .ma-bad{font-weight:bold}
+.ma-d .ma-good{font-weight:bold}
+</style>
+<div class="ma-d" id="ma-d" data-endpoint="/plugins/multiarray/include/disks-ajax.php" data-csrf="<?=$mad_h($var['csrf_token'] ?? '')?>">
+<p><strong>Disclaimer:</strong> Multi Arrays is an independent project, not made or supported by Lime Technology. Neither its author nor Lime Technology takes any responsibility for any results caused by this plugin or its implementation. It is a proof of concept, meant only to show how simple support for multiple arrays could be. If that doesn&#39;t sit well with you, wait for the official support for multiple arrays in Unraid.</p>
+<p>Every disk of this server, grouped by where it belongs. Temperature and SMART health are the values Unraid last read; a
+sleeping disk is not woken for them. <em>Details</em> shows every name the disk goes by. <em>Locate</em> reads a disk for
+<?=MA_D_LOCATE_SECS?> seconds so its activity light flashes; it only reads.</p>
+<form class="ma-d-find" data-d="form" autocomplete="off">
+  <label for="ma-d-q">Find a disk</label>
+  <input type="text" id="ma-d-q" data-d="q" maxlength="2000" placeholder="ex. sdk, ata7, md1p1, a serial, a bay (HDD3) or a whole log line">
+  <input type="submit" value="Find">
+</form>
+<div class="ma-d-msg" data-d="findout" role="status" aria-live="polite"></div>
+
+<?foreach ($mad['units'] as $u):?>
+<div class="title"><span class="left"><i class="fa fa-th title"></i><?=$mad_h($u['name'].' '.$u['unit'])?> (front view)</span></div>
+<?if (!$u['cabling'] || !$u['ports_known']):?>
+<p>The bays of this enclosure are not mapped yet: its disks are shown by the card's controller (PCI order) and port.</p>
+<?else:?>
+<p><?=$u['confirmed'] ? 'Cabling confirmed.' : 'Cabling not confirmed: the bays follow the cabling of the unit the profile was measured on. Locate a disk and check that the light flashes in the bay shown below. If it does not, set which group of bays each controller of the card feeds and save.'?></p>
+<?endif;?>
+<div class="ma-d-grid" role="list" aria-label="<?=$mad_h($u['name'].' '.$u['unit'])?> bays">
+<?foreach ($u['front'] as $row) foreach ($row as $c): $dk = null;
+  if ($c['key'] !== null) foreach ($mad['groups'] as $g) foreach ($g['disks'] as $d) if ($d['key'] === $c['key']) $dk = $d;?>
+  <div role="listitem" class="ma-d-bay<?=$dk ? '' : ' ma-d-empty'?>"<?=$dk ? ' data-d-key="'.$mad_h($dk['key']).'"' : ''?>><b><?=$mad_h($c['bay'])?></b><?=$dk ? $mad_h($dk['device'].' '.$dk['role_label']).'<br>'.$mad_h($dk['size_text']) : 'empty'?></div>
+<?endforeach;?>
+</div>
+<?if ($u['cabling'] && $u['ports_known']): $mad_gr = $u['groups'];?>
+<form class="ma-d-cab" data-d="cabling" data-switch="<?=$mad_h($u['switch'])?>">
+<?foreach ($u['controllers'] as $i => $ctl):?>
+<dl><dt><label for="ma-d-cab-<?=$u['unit']?>-<?=$i?>">Controller <?=$i + 1?> (<?=$mad_h($ctl)?>) feeds bays:</label></dt>
+<dd><select id="ma-d-cab-<?=$u['unit']?>-<?=$i?>" name="order[]">
+<?foreach ($mad_gr as $gk => $bays):?><option value="<?=$mad_h($gk)?>"<?=((string)($u['cabling'][$i] ?? '') === (string)$gk) ? ' selected' : ''?>><?=$mad_h(reset($bays).'-'.end($bays))?></option><?endforeach;?>
+</select></dd></dl>
+<?endforeach;?>
+<dl><dt>&nbsp;</dt><dd><input type="submit" value="<?=$u['confirmed'] ? 'Save cabling' : 'Confirm cabling'?>"> <span data-d="cabout" role="status" aria-live="polite"></span></dd></dl>
+</form>
+<?endif;?>
+<?endforeach;?>
+
+<?foreach ($mad['groups'] as $g):?>
+<div class="title"><span class="left"><i class="fa fa-hdd-o title"></i><?=$mad_h($g['title'])?></span></div>
+<?if ($g['note'] !== ''):?><p><?=$mad_h($g['note'])?></p><?endif;?>
+<?if (!$g['disks']):?><p><em>No disks.</em></p><?continue; endif;?>
+<div class="ma-d-scroll"><table class="unraid ma-d-t">
+<thead><tr><th scope="col">Slot</th><th scope="col">Device</th><th scope="col">Size</th><th scope="col">Model</th><th scope="col">Serial</th><th scope="col">Temp.</th><th scope="col">SMART</th><th scope="col">Controller, port</th><th scope="col">Bay</th><th scope="col">Actions</th></tr></thead>
+<tbody>
+<?foreach ($g['disks'] as $d): $id = 'ma-d-n-'.$mad_h($d['device']);?>
+<tr data-d-key="<?=$mad_h($d['key'])?>" data-d-dev="<?=$mad_h($d['device'])?>" data-d-spun="<?=$d['spundown'] ? '1' : '0'?>">
+  <td><?=$mad_h($d['role_label'])?></td><td><?=$mad_h($d['device'])?></td><td><?=$mad_h($d['size_text'])?></td>
+  <td><?=$mad_h($d['model'])?></td><td><?=$mad_h($d['serial'])?></td><td><?=$mad_h($d['temp'])?></td>
+  <td title="<?=$mad_h($d['smart']['title'])?>"><?if (isset($mad_icon[$d['smart']['state']])):?><i class="fa <?=$mad_icon[$d['smart']['state']]?> <?=$mad_cls[$d['smart']['state']]?>" aria-hidden="true"></i> <?endif;?><?=$mad_h($d['smart']['text'])?></td>
+  <td><?=$mad_h($d['controller'])?><br><?=$mad_h($d['port'])?></td><td><?=$mad_h($d['bay'])?></td>
+  <td class="ma-d-act"><input type="button" class="ma-d-more" value="Details" aria-expanded="false" aria-controls="<?=$id?>"><input type="button" class="ma-d-loc" value="Locate" aria-label="Locate <?=$mad_h($d['device'])?>"></td>
+</tr>
+<?if ($d['warning'] !== ''):?><tr class="ma-d-warn"><td colspan="10"><i class="fa fa-exclamation-triangle orange-text" aria-hidden="true"></i> <strong><?=$mad_h($d['device'])?>:</strong> <?=$mad_h($d['warning'])?></td></tr><?endif;?>
+<tr class="ma-d-names" id="<?=$id?>" hidden><td colspan="10"><dl class="ma-d-nl">
+<?foreach ($d['names'] as [$k, $v]):?><dt><?=$mad_h($k)?></dt><dd><?=$mad_h($v)?></dd><?endforeach;?>
+<?if ($d['virtual']):?><dt>Virtual disk</dt><dd><?=$mad_h(implode('; ', $d['virtual']))?></dd><?endif;?>
+</dl></td></tr>
+<?endforeach;?>
+</tbody></table></div>
+<?endforeach;?>
+<div class="ma-d-msg" data-d="locout" role="status" aria-live="polite"></div>
+
+<div class="title"><span class="left"><i class="fa fa-search title"></i>Found arrays</span></div>
+<p>A read-only check of the disks that belong to no array and no pool (and of disks pinned to an extra array that is not
+running). For each it reports evidence: the partition table and where partition 1 starts, the file system signature
+(type, UUID, label; for btrfs also devices, devid and generation) and, for a disk without a file system, whether it is
+blank (<?=MA_D_SAMPLES?> evenly spaced reads). From that it suggests which disks may form an array. It reads the disks
+(<code>blkid -p</code>, the partition table, a few blocks); it never mounts, never writes and never assigns. A sleeping
+free disk spins up for it, and the blank test takes a few seconds per disk. You decide which disk goes where.</p>
+<p><input type="button" data-d="detect" value="Look for arrays on free disks"></p>
+<div class="ma-d-msg" data-d="detout" role="status" aria-live="polite"></div>
+<div data-d="found"></div>
+</div>
+<script src="/plugins/multiarray/include/disks.js?v=<?=substr(md5((string)@md5_file(($docroot ?? '/usr/local/emhttp').'/plugins/multiarray/include/disks.js')), 0, 8)?>"></script>

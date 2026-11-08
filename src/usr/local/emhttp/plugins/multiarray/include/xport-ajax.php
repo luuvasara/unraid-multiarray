@@ -2,6 +2,7 @@
 /* Export / import endpoint of Settings > Multi Arrays > Export and import.
  * GET  ?action=arrays            which arrays can be exported / imported into
  * GET  ?action=export&n=N        the export file (attachment) or 409 + {error, reasons, why}
+ * GET  ?action=checkstatus&target=N  progress and result of the parity check of array N
  * POST action=plan|apply|start|check (csrf_token checked by Unraid's local_prepend before this runs) */
 require_once '/usr/local/emhttp/plugins/multiarray/include/xport.php';
 header('Content-Type: application/json');
@@ -44,6 +45,8 @@ case 'start':
   if (!$post || ($_POST['confirm'] ?? '') !== 'yes') reply(400, ['ok' => false, 'error' => 'not confirmed']);
   ignore_user_abort(true); set_time_limit(0);
   reply(200, ma_x_start(upload(), (int)($_POST['target'] ?? 0), $ctx));
+case 'checkstatus':
+  reply(200, ma_x_check_status((int)($_GET['target'] ?? 0), $ctx));
 case 'check':
   if (!$post) reply(405, ['ok' => false]);
   reply(200, ma_x_check((int)($_POST['target'] ?? 0), $ctx));
