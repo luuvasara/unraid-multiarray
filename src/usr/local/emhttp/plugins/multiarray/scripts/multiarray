@@ -153,7 +153,7 @@ start_one() {
   inst_running $N && { echo "array $N already running"; return 0; }
   [ "$SERVICE" = enable ] || { echo "service disabled"; return 0; }
   drv_check $N || return 3
-  drv_loaded $N && { log "a$N: stale driver module, unloading"; drv_unload $N; }
+  drv_loaded $N && { log "a$N: stale driver module, unloading"; drv_unload $N || { echo "array $N: a stale driver still has a disk in use, see $LOG" >&2; return 1; }; }
   seed_flash $N
   prepare $N
   stage_disks $N
@@ -180,6 +180,12 @@ stop_one() {
   local N=$1 i st p
   if inst_running $N; then
     st=$(inst_var $N mdState)
+    # a start in flight: the driver has the array started before emhttpd says so (it is still mounting); let it
+    # finish and stop it the normal way, or it would be killed mid-start with the array left started
+    if [ "$st" != STARTED ] && [ "$(drv_state $N)" = STARTED ]; then
+      log "a$N: start in progress (driver STARTED, emhttpd $st), waiting for it"
+      for i in $(seq 1 120); do st=$(inst_var $N mdState); [ "$st" = STARTED ] && break; inst_running $N || break; sleep 1; done
+    fi
     if [ "$st" = STARTED ]; then
       log "a$N: stopping array (cmdStop)"; em_cmd $N cmdStop=Stop >/dev/null
       for i in $(seq 1 300); do st=$(inst_var $N mdState); [ "$st" = STOPPED ] && break; sleep 1; done
@@ -190,7 +196,8 @@ stop_one() {
     for i in 1 2 3 4 5 6 7 8 9 10; do [ -z "$(inst_pids $N)" ] && break; sleep 1; done
     for p in $(inst_pids $N); do kill -9 $p 2>/dev/null; done
   fi
-  drv_unload $N
+  # drv_unload stops an array the driver still has started (emhttpd started it after the check above)
+  drv_unload $N || { echo "array $N: the driver could not stop the array, a disk is still in use; driver left loaded" >&2; return 1; }
   rm -f $RUNROOT/a$N/ns.id; rm -rf $RUNROOT/a$N/state/* $RUNROOT/a$N/run/* 2>/dev/null
   mountpoint -q $RUNROOT/cfg$N && umount $RUNROOT/cfg$N
   log "a$N: stopped"; echo "array $N stopped"
@@ -217,13 +224,23 @@ targets() { case "$1" in ""|all) seq 2 $ARRAYS ;; *) echo "$1" ;; esac; }
 
 # what enabling does (also what a boot or an install does when enabled): drivers, generated tabs, host filter, start
 setup() {
-  local KVER N src
+  local KVER N src ko want
   KVER=$(uname -r); src=$(cat $PLUG/source.url 2>/dev/null)
   mkdir -p $FLASH/ko/$KVER
   for N in 2 3 4 5 6 7 8 9; do
-    [ -s $FLASH/ko/$KVER/md_unraid$N.ko ] && continue
-    [ -n "$src" ] && curl -fsS --max-time 60 -o $FLASH/ko/$KVER/md_unraid$N.ko "$src/ko/$KVER/md_unraid$N.ko" && continue
-    rm -f $FLASH/ko/$KVER/md_unraid$N.ko
+    ko=$FLASH/ko/$KVER/md_unraid$N.ko
+    # this package's build of the driver (drivers/ko.md5); a cached copy from an older build is fetched again
+    want=$(awk -v f="$KVER/md_unraid$N.ko" '$2==f{print $1}' $PLUG/drivers/ko.md5 2>/dev/null)
+    if [ -s $ko ]; then
+      [ -z "$want" ] && continue
+      [ "$(md5sum < $ko | cut -d' ' -f1)" = "$want" ] && continue
+    fi
+    if [ -n "$src" ] && curl -fsS --max-time 60 -o $ko.new "$src/ko/$KVER/md_unraid$N.ko" &&
+       { [ -z "$want" ] || [ "$(md5sum < $ko.new | cut -d' ' -f1)" = "$want" ]; }; then
+      mv -f $ko.new $ko; continue
+    fi
+    rm -f $ko.new
+    [ -s $ko ] && { echo "multiarray: could not fetch the updated md_unraid$N.ko for kernel $KVER, keeping the cached one"; continue; }
     echo "multiarray: no driver build for kernel $KVER (md_unraid$N) - extra arrays stay disabled until the plugin is updated"; break
   done
   $PLUG/scripts/gen-pages || echo "multiarray: gen-pages: stock page changed, see /var/log/syslog"
@@ -245,7 +262,7 @@ teardown() {
     echo "Multi Arrays stays enabled: stop array(s) ${busy% } first (on their Main tabs), then disable."
     return 1
   fi
-  for N in 9 8 7 6 5 4 3 2; do inst_running $N && stop_one $N; done
+  for N in 9 8 7 6 5 4 3 2; do { inst_running $N || drv_loaded $N; } && stop_one $N; done
   hostfilter off
   for N in 2 3 4 5 6 7 8 9; do rm -f $PLUG/Main${N}Devices.page $PLUG/Main${N}Operation.page $PLUG/nchan/device_list$N $PLUG/nchan/parity_list$N; done
   rm -f /var/run/multiarray/enabled
