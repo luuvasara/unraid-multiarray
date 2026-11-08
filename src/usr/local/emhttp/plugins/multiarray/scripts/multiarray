@@ -1,6 +1,13 @@
 #!/bin/bash
-# multiarray start|stop|restart [N|all]   status [N]   status-json   gen-seed N
+# multiarray start|stop|restart [N|all]   status [N]   status-json   setup   apply   export N   import plan|apply|start|check ...
 # Instance N (2..ARRAYS) = an unmodified second emhttpd + shfs + nginx/php-fpm in private mount+UTS namespaces.
+# With SERVICE != enable (the default of a new install) nothing runs: only export/import, status, stop and apply work.
+case "$1" in
+  export) shift; exec /usr/local/emhttp/plugins/multiarray/scripts/xport export "$@" ;;   # read-only, works with extra arrays disabled
+  import) shift; exec /usr/local/emhttp/plugins/multiarray/scripts/xport "$@" ;;
+  hotplug|refresh|start|restart|setup|gen-pages|hostfilter)
+    [ "$1 ${2:-}" = "hostfilter off" ] || grep -qs '^SERVICE="enable"' /boot/config/plugins/multiarray/multiarray.cfg || exit 0 ;;
+esac
 . /usr/local/emhttp/plugins/multiarray/scripts/lib.sh
 mkdir -p $RUNROOT $FLASH
 
@@ -153,7 +160,7 @@ start_one() {
   $PLUG/scripts/gen-pages $N >>$LOG 2>&1 || log "a$N: gen-pages reported missing substitutions (stock page changed?)"
   mkdir -p $RUNROOT/cfg$N; mountpoint -q $RUNROOT/cfg$N || mount --bind $FLASH/array$N $RUNROOT/cfg$N
   log "a$N: starting (port $(port_of $N), driver $DRIVER)"
-  N=$N SB=$(sb_path $N) setsid unshare -m -u --propagation private $PLUG/scripts/inst-run >>$LOG 2>&1 </dev/null 9>&- &
+  N=$N SB=$(sb_path $N) setsid unshare -m -u --propagation private $PLUG/scripts/inst-run >>$LOG 2>&1 </dev/null 8>&- 9>&- &
   for i in $(seq 1 60); do
     inst_running $N && [ -n "$(inst_var $N mdState)" ] && { log "a$N: up, mdState=$(inst_var $N mdState)"; echo "array $N started (GUI port $(port_of $N))"; return 0; }
     sleep 1
@@ -208,6 +215,50 @@ hostfilter() {
 
 targets() { case "$1" in ""|all) seq 2 $ARRAYS ;; *) echo "$1" ;; esac; }
 
+# what enabling does (also what a boot or an install does when enabled): drivers, generated tabs, host filter, start
+setup() {
+  local KVER N src
+  KVER=$(uname -r); src=$(cat $PLUG/source.url 2>/dev/null)
+  mkdir -p $FLASH/ko/$KVER
+  for N in 2 3 4 5 6 7 8 9; do
+    [ -s $FLASH/ko/$KVER/md_unraid$N.ko ] && continue
+    [ -n "$src" ] && curl -fsS --max-time 60 -o $FLASH/ko/$KVER/md_unraid$N.ko "$src/ko/$KVER/md_unraid$N.ko" && continue
+    rm -f $FLASH/ko/$KVER/md_unraid$N.ko
+    echo "multiarray: no driver build for kernel $KVER (md_unraid$N) - extra arrays stay disabled until the plugin is updated"; break
+  done
+  $PLUG/scripts/gen-pages || echo "multiarray: gen-pages: stock page changed, see /var/log/syslog"
+  hostfilter sync
+  udevadm control --reload 2>/dev/null
+  ( refresh )   # in a subshell: refresh keeps its lock on fd 8, which nothing started later may inherit
+  # main array already running: bring the extra arrays up now (in the background)
+  grep -q '^mdState="STARTED"' /var/local/emhttp/var.ini 2>/dev/null && ( setsid $0 start all >/dev/null 2>&1 </dev/null 8>&- 9>&- & )
+  mkdir -p /var/run/multiarray; : > /var/run/multiarray/enabled
+  true
+}
+# what disabling does: refuse while an extra array is started; else stop the instances, drop the host filter and the generated tabs
+teardown() {
+  local N busy=""
+  for N in 2 3 4 5 6 7 8 9; do inst_running $N && [ "$(inst_var $N mdState)" = STARTED ] && busy+="$N "; done
+  if [ -n "$busy" ]; then
+    sed -i 's/^SERVICE=.*/SERVICE="enable"/' $FLASH/multiarray.cfg
+    log "disable refused: array(s) ${busy}started"
+    echo "Multi Arrays stays enabled: stop array(s) ${busy% } first (on their Main tabs), then disable."
+    return 1
+  fi
+  for N in 9 8 7 6 5 4 3 2; do inst_running $N && stop_one $N; done
+  hostfilter off
+  for N in 2 3 4 5 6 7 8 9; do rm -f $PLUG/Main${N}Devices.page $PLUG/Main${N}Operation.page $PLUG/nchan/device_list$N $PLUG/nchan/parity_list$N; done
+  rm -f /var/run/multiarray/enabled
+  log "disabled: extra arrays stopped, generated tabs removed"
+  true
+}
+# the settings page's Apply: enable / disable, or (already enabled) new array count and pins
+apply() {
+  if [ "$SERVICE" != enable ]; then teardown
+  elif [ -e /var/run/multiarray/enabled ]; then $PLUG/scripts/gen-pages >>$LOG 2>&1; ( refresh )
+  else setup; fi
+}
+
 status_json() {
   local N sep=""; echo -n '['
   for N in $(seq 2 9); do
@@ -226,8 +277,10 @@ case "$1" in
   status-json) status_json ;;
   hostfilter) hostfilter ${2:-sync} ;;
   refresh) refresh ;;
+  setup)   setup ;;
+  apply)   apply ;;
   hotplug) ( sleep 2; setsid $0 refresh ) >/dev/null 2>&1 </dev/null & ;;   # from the udev rule: return at once, refresh after udev settles
   gen-pages) shift; exec $PLUG/scripts/gen-pages "$@" ;;
   em)      shift; em_cmd "$@" ;;
-  *) echo "usage: $0 start|stop|restart [N|all] | refresh | status | status-json | em N cmd" >&2; exit 2 ;;
+  *) echo "usage: $0 start|stop|restart [N|all] | refresh | setup | apply | status | status-json | em N cmd | export N | import plan|apply|start|check ..." >&2; exit 2 ;;
 esac

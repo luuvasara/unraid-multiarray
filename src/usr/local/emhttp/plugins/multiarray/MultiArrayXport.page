@@ -1,0 +1,159 @@
+Menu="MultiArray:2"
+Title="Export and import"
+Tag="exchange"
+Markdown="false"
+---
+<?PHP
+/* Export and import of a whole array. Export works on every server, also with Multi Arrays not enabled; it only reads.
+ * Import shows the plan first; nothing is written before the confirm. Logic: include/xport.php, endpoint include/xport-ajax.php. */
+$ma_why = htmlspecialchars((string)@file_get_contents('/usr/local/emhttp/plugins/multiarray/help/why-virtual.txt'));
+?>
+<style>
+.ma-x p,.ma-x li{max-width:62em}
+.ma-x table.ma-plan{border-collapse:collapse;width:auto;margin:.5em 0}
+.ma-x table.ma-plan td,.ma-x table.ma-plan th{padding:3px 12px 3px 0;text-align:left;vertical-align:top}
+.ma-x .ma-msg{margin:.6em 0;max-width:62em}
+.ma-x .ma-bad{color:#e22828}
+.ma-x .ma-warn{color:#e68a00}
+.ma-x .ma-good{color:#3c9a3c}
+.ma-x pre.ma-why{white-space:pre-wrap;max-width:62em;font-family:inherit}
+.ma-x code{font-size:.95em}
+</style>
+<div class="ma-x">
+<p><strong>Disclaimer:</strong> Multi Arrays is an independent project, not made or supported by Lime Technology. Neither its author nor Lime Technology takes any responsibility for any results caused by this plugin or its implementation. It is a proof of concept, meant only to show how simple support for multiple arrays could be. If that doesn&#39;t sit well with you, wait for the official support for multiple arrays in Unraid.</p>
+
+<div class="title"><span class="left"><i class="fa fa-download title"></i>Export an array</span></div>
+<p>Writes a file that describes the array: which disk is in which slot (Unraid's disk id, serial number and size, the
+same things Unraid itself checks), the partition layout, file system and encryption UUIDs, and the array's settings.
+It only reads; it works without enabling extra arrays. It never contains keys, passphrases, passwords or files.
+Export refuses an array that is not clean (a disk disabled, missing or emulated, a sync running, parity never valid)
+and an array on a VM's virtual disks.</p>
+<dl><dt>Array:</dt><dd><select id="ma-x-src"></select>
+<input type="button" id="ma-x-export" value="Export array"></dd></dl>
+<div id="ma-x-exmsg" class="ma-msg"></div>
+<details id="ma-x-why" hidden><summary>Why?</summary><pre class="ma-why"><?=$ma_why?></pre></details>
+<p><small>From a terminal: <code>/usr/local/emhttp/plugins/multiarray/scripts/multiarray export N file.json</code> (1 = the main array; the file is written only when the export succeeds).</small></p>
+
+<div class="title"><span class="left"><i class="fa fa-upload title"></i>Import an array</span></div>
+<p>Puts the disks of an exported array into the same slots here: as an extra array (stopped, with no disks assigned
+or pinned), or as the main array on a fresh server (stopped, nothing assigned). Each slot must find exactly one free
+disk with the same serial number and size, like Unraid matches them itself; free means not in any array or pool, not
+pinned to another array, not mounted. The plan is shown first and nothing is changed before you confirm. The
+assignments are made through Unraid's own commands, the same ones the Main page sends. Import never formats a disk and
+never starts a parity sync.</p>
+<dl><dt>Export file:</dt><dd><input type="file" id="ma-x-file" accept=".json,application/json"></dd></dl>
+<dl><dt>Import as:</dt><dd><select id="ma-x-dst"></select>
+<input type="button" id="ma-x-plan" value="Show the plan" disabled></dd></dl>
+<div id="ma-x-planbox" class="ma-msg"></div>
+<div id="ma-x-confirmbox" hidden>
+<p><label><input type="checkbox" id="ma-x-yes"> Yes, these are the disks of that array; assign them to these slots.</label>
+<input type="button" id="ma-x-apply" value="Import" disabled></p>
+</div>
+<div id="ma-x-result" class="ma-msg"></div>
+<div id="ma-x-startbox" hidden>
+<p>Next: start the array with <em>Parity is already valid</em>, as the Main page does for a new array whose parity is
+known to be good. With dual parity this is right only because every disk is in its original slot, which the import
+made sure of. Nothing is written to parity.</p>
+<p><label><input type="checkbox" id="ma-x-startyes"> Yes, start it with parity already valid.</label>
+<input type="button" id="ma-x-start" value="Start array" disabled></p>
+</div>
+<div id="ma-x-checkbox" hidden>
+<p>Recommended: a read-only parity check. It reads every disk and counts errors, but writes no corrections. 0 errors
+confirms the import.</p>
+<p><input type="button" id="ma-x-check" value="Start read-only parity check"></p>
+</div>
+</div>
+
+<script>
+(function(){
+  var url='/plugins/multiarray/include/xport-ajax.php', csrf='<?=htmlspecialchars($var['csrf_token'] ?? '')?>', file=null, plan=null;
+  function name(n){return n==1?'Array 1 (main array)':'Array '+n;}
+  function line(box,cls,text){$('<div>').addClass(cls||'').text(text).appendTo(box);}
+  function list(box,items,cls){var ul=$('<ul>').appendTo(box);(items||[]).forEach(function(x){$('<li>').addClass(cls||'').text(x).appendTo(ul);});}
+  function arrays(){
+    $.getJSON(url,{action:'arrays'},function(d){
+      var s=$('#ma-x-src').empty(), t=$('#ma-x-dst').empty();
+      d.arrays.forEach(function(a){
+        $('<option>').val(a.n).text(name(a.n)+(a.up?' - '+(a.fsState||a.mdState||''):' - not running')).prop('disabled',!a.up).appendTo(s);
+        $('<option>').val(a.n).text(name(a.n)+(a.importable?' - stopped, empty':' - not available: '+a.why)).prop('disabled',!a.importable).appendTo(t);
+      });
+      if (!t.find('option:enabled').length) { $('#ma-x-plan').prop('disabled',true); line($('#ma-x-planbox').empty(),'','No array here can take an import now: the target must be stopped and empty (an extra array with no disks assigned or pinned, or the main array of a fresh server).'); }
+      else t.val(t.find('option:enabled').first().val());
+      if (!d.service) line($('#ma-x-exmsg').empty(),'','Extra arrays are not enabled on this server: export works for the main array, and import only into a fresh main array.');
+    });
+  }
+  $('#ma-x-export').on('click',function(){
+    var n=$('#ma-x-src').val(), box=$('#ma-x-exmsg').empty(); $('#ma-x-why').prop('hidden',true);
+    line(box,'','Reading array '+n+'...');
+    fetch(url+'?action=export&n='+encodeURIComponent(n),{credentials:'same-origin'}).then(function(r){
+      if (r.ok) return r.blob().then(function(b){
+        var cd=r.headers.get('Content-Disposition')||'', m=cd.match(/filename="([^"]+)"/), a=document.createElement('a');
+        a.href=URL.createObjectURL(b); a.download=m?m[1]:'multiarray-export.json'; document.body.appendChild(a); a.click(); a.remove();
+        box.empty(); line(box,'ma-good','Exported: '+a.download);
+        b.text().then(function(t){try{var j=JSON.parse(t); if(j.warnings&&j.warnings.length){line(box,'ma-warn','Warnings, also in the file:'); list(box,j.warnings,'ma-warn');}}catch(e){}});
+      });
+      return r.json().then(function(j){
+        box.empty(); line(box,'ma-bad',j.error||'Export failed.'); list(box,j.reasons,'ma-bad');
+        if (j.why) $('#ma-x-why').prop('hidden',false);
+      });
+    }).catch(function(){box.empty(); line(box,'ma-bad','Export failed: no answer from the server.');});
+  });
+  $('#ma-x-file').on('change',function(){
+    file=null; plan=null; $('#ma-x-planbox,#ma-x-result').empty(); $('#ma-x-confirmbox,#ma-x-startbox,#ma-x-checkbox').prop('hidden',true);
+    var f=this.files[0]; if(!f) return;
+    var rd=new FileReader(); rd.onload=function(){file=rd.result; $('#ma-x-plan').prop('disabled',!$('#ma-x-dst option:enabled').length);}; rd.readAsText(f);
+  });
+  $('#ma-x-dst').on('change',function(){plan=null; $('#ma-x-planbox').empty(); $('#ma-x-confirmbox').prop('hidden',true);});
+  $('#ma-x-plan').on('click',function(){
+    var box=$('#ma-x-planbox').empty(); $('#ma-x-confirmbox').prop('hidden',true); $('#ma-x-yes').prop('checked',false); $('#ma-x-apply').prop('disabled',true);
+    if (!file) return;
+    $.post(url,{action:'plan',target:$('#ma-x-dst').val(),json:file,csrf_token:csrf},function(p){
+      plan=p;
+      if (p.rows&&p.rows.length){
+        var t=$('<table class="ma-plan"><thead><tr><th>Slot</th><th>Exported disk</th><th>Disk here</th></tr></thead><tbody></tbody></table>').appendTo(box);
+        p.rows.forEach(function(r){
+          var tr=$('<tr>').appendTo(t.find('tbody'));
+          $('<td>').text(r.role).appendTo(tr);
+          $('<td>').text(r.want.id+' (serial '+r.want.serial+', '+r.want.size_kb+' KiB)').appendTo(tr);
+          var c=$('<td>').appendTo(tr);
+          if (r.disk){ $('<div>').text(r.disk.device+' - '+r.disk.id).appendTo(c); $('<div>').text('serial '+r.disk.serial+', '+r.disk.size_kb+' KiB, '+r.disk.model).appendTo(c); $('<div>').text(r.disk.by_id.join(', ')).appendTo(c); }
+          else $('<div class="ma-bad">').text(r.problem).appendTo(c);
+        });
+      }
+      if (p.warnings&&p.warnings.length){line(box,'ma-warn','Warnings recorded at export:'); list(box,p.warnings,'ma-warn');}
+      if (!p.ok){line(box,'ma-bad','Nothing can be imported:'); list(box,p.problems,'ma-bad'); return;}
+      if (p.encrypted) line(box,'ma-warn','The array is encrypted: after the import, start it from its Main tab with its passphrase and "Parity is already valid".');
+      line(box,'ma-good','Every slot has exactly one matching free disk. Nothing has been changed yet.');
+      $('#ma-x-confirmbox').prop('hidden',false);
+    },'json').fail(function(x){line(box,'ma-bad',(x.responseJSON&&x.responseJSON.error)||'The plan could not be made.');});
+  });
+  $('#ma-x-yes').on('change',function(){$('#ma-x-apply').prop('disabled',!this.checked);});
+  $('#ma-x-startyes').on('change',function(){$('#ma-x-start').prop('disabled',!this.checked);});
+  $('#ma-x-apply').on('click',function(){
+    var box=$('#ma-x-result').empty(); $(this).prop('disabled',true); $('#ma-x-yes').prop('disabled',true);
+    line(box,'','Assigning...');
+    $.post(url,{action:'apply',confirm:'yes',target:plan.target,code:plan.code,json:file,csrf_token:csrf},function(r){
+      box.empty(); list(box,r.log);
+      if (!r.ok){line(box,'ma-bad',r.error); return;}
+      line(box,'ma-good','All slots assigned. Array '+plan.target+' state: '+r.mdState+'.');
+      if (!plan.encrypted && r.mdState=='NEW_ARRAY') $('#ma-x-startbox').prop('hidden',false);
+      else line(box,'','Start it from its Main tab.');
+    },'json').fail(function(){box.empty(); line(box,'ma-bad','No answer from the server; check the Main tab of array '+plan.target+'.');});
+  });
+  $('#ma-x-start').on('click',function(){
+    var box=$('#ma-x-result'); $(this).prop('disabled',true); $('#ma-x-startyes').prop('disabled',true); line(box,'','Starting...');
+    $.post(url,{action:'start',confirm:'yes',target:plan.target,json:file,csrf_token:csrf},function(r){
+      if (!r.ok){line(box,'ma-bad',r.error); return;}
+      line(box,'ma-good','Array '+plan.target+' started ('+r.mdState+').'+(r.running?' A parity operation is running: '+r.resync:''));
+      $('#ma-x-checkbox').prop('hidden',false);
+    },'json');
+  });
+  $('#ma-x-check').on('click',function(){
+    var box=$('#ma-x-result'); $(this).prop('disabled',true);
+    $.post(url,{action:'check',target:plan.target,csrf_token:csrf},function(r){
+      line(box,r.ok?'ma-good':'ma-bad',r.ok?'Read-only parity check started; follow it on the Main tab of array '+plan.target+'.':r.error);
+    },'json');
+  });
+  arrays();
+})();
+</script>

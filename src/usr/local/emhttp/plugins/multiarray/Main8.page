@@ -3,6 +3,6 @@ Menu="Tasks:1"
 Type="xmenu"
 Title="Main8"
 Code="e908"
-Cond="(int)(@parse_ini_file('/boot/config/plugins/multiarray/multiarray.cfg')['ARRAYS']?:3)>=8"
+Cond="(@parse_ini_file('/boot/config/plugins/multiarray/multiarray.cfg')['SERVICE']??'')=='enable' && (int)(@parse_ini_file('/boot/config/plugins/multiarray/multiarray.cfg')['ARRAYS']?:3)>=8"
 ---
 <?PHP $arr = 8; include "/usr/local/emhttp/plugins/multiarray/include/main.php"; ?>

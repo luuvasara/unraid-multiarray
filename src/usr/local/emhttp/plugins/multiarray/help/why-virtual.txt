@@ -1,0 +1,57 @@
+Why an array on a VM's virtual disks can't be exported (and what to do instead)
+
+This array's disks are virtual disks of a VM, not the real disks, so it can't be exported.
+Unraid recognises each array disk by its serial number and size. A virtual disk shows a serial the
+hypervisor made up (or none), not the real disk's, and its size rarely matches a real disk. On another
+server not one slot would match, so the array would have to be copied disk by disk and its parity built
+again. Create a new array on the real disks and copy your files over instead.
+
+Why, explained simply
+
+1. Unraid knows each disk by its name tag. Every disk carries a serial number, like a name tag. Unraid's
+array list on the flash says "slot 1 is the disk with tag ABC, this big". When it starts, it checks every
+slot's tag and size. A disk with another tag is the wrong disk, and the slot shows as wrong or missing.
+
+2. A virtual disk wears a made-up tag. The hypervisor shows the VM a pretend disk and gives it a tag it
+invents (or none at all). The real disk underneath has its own, different tag. So the array list inside
+the VM names disks that don't exist anywhere else. On the real server, not one slot would match.
+
+3. Often there is no disk to move at all. Many VM setups keep each virtual disk as a big file (an image)
+on some other disk. Then the array's "disks" are files, and the only way out is to copy them.
+
+4. Copying a virtual disk onto a real one doesn't fit. The real disk is almost never exactly the same
+size. Unraid checks the size of every slot, expects its own partition layout that runs to the end of the
+disk, and its parity covers every disk byte for byte up to the largest one. A copy onto a bigger disk
+leaves a smaller partition, a different size and parity that no longer adds up, so parity has to be built
+again anyway. Disks with different sector sizes (512 bytes or 4 KB) make it worse.
+
+5. Two copies of the same disk confuse the system. A copied file system keeps its ID. While the old and
+the new copy are both connected, the server sees two disks with the same ID and refuses to mount one of
+them (XFS does exactly that).
+
+6. Old and new may not speak the same version. The VM may run another Unraid version than the server.
+A file system made by a newer version can use features an older one can't read, and settings stored for
+one version may mean something else in another.
+
+7. It costs the most time of all options. Copying a disk image reads and writes every byte, even the
+empty ones, and then parity is built again. Copying only your files moves only what you have.
+
+What to do instead
+
+1. On the new server, create the new array on the real disks and let parity build once.
+2. Copy the content over from the old array, share by share, for example with rsync over the network or
+   from the VM's shares. Only your files move, not empty space.
+3. Check the copy (file counts and sizes, or checksums), then retire the old array.
+
+This is also the only way that never puts the old data at risk: the old array stays as it is until the
+new one is complete and checked.
+
+When importing does work
+
+If the VM got a whole disk controller passed through, it saw the real disks with their real tags. Then
+the VM's array list already names the real disks, and Export works as on any server: the import is a
+pure mapping, with no copying and no new parity sync.
+
+---
+
+Disclaimer: Multi Arrays is an independent project, not made or supported by Lime Technology. Neither its author nor Lime Technology takes any responsibility for any results caused by this plugin or its implementation. It is a proof of concept, meant only to show how simple support for multiple arrays could be. If that doesn't sit well with you, wait for the official support for multiple arrays in Unraid.

@@ -1,4 +1,5 @@
 #!/bin/bash
 # trace of the emhttp event order (evidence for choosing hooks); harmless
+grep -qs '^SERVICE="enable"' /boot/config/plugins/multiarray/multiarray.cfg || exit 0   # extra arrays not enabled: nothing to do
 echo "$(date '+%F %T') emhttp event: $1" >> /var/log/multiarray-events.log
 exit 0

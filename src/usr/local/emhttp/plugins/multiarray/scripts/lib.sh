@@ -3,7 +3,7 @@ PLUG=/usr/local/emhttp/plugins/multiarray
 FLASH=/boot/config/plugins/multiarray
 RUNROOT=/var/lib/multiarray
 LOG=/var/log/multiarray.log
-SERVICE=enable ARRAYS=3 BASEPORT=8081 DRIVER=renamed KOURL=
+SERVICE=disable ARRAYS=3 BASEPORT=8081 DRIVER=renamed KOURL=
 [ -r $PLUG/default.cfg ] && . $PLUG/default.cfg
 # inside an instance namespace /boot/config is re-pointed, so fall back to the copy staged by 'multiarray start'
 CFG=$FLASH/multiarray.cfg; [ -r $CFG ] || CFG=$RUNROOT/multiarray.cfg

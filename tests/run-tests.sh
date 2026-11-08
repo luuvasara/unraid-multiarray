@@ -28,6 +28,15 @@ grep -q "<MinVer>$(sed -n 's/^.*min="\([^"]*\)".*/\1/p' "$PLG" | head -1)</MinVe
 grep -q 'for f in &base;/&name;-\*.txz; do \[ "$f" = "&base;/&name;-&version;-x86_64-1.txz" \] || rm -f "$f"; done' "$PLG" && ok "cleanup keeps the current version's txz" || bad "cleanup does not keep the current txz"
 grep -q 'kit/install-notes.sh "&version;"' "$PLG" && ok "post-install prints the changes box" || bad "install-notes.sh not called"
 grep -qi 'proof of concept' "$HERE/plugins/$NAME.xml" && ok "template keeps the proof-of-concept warning" || bad "template lost the warning"
+XT=$(php "$HERE/tests/xport-test.php" 2>&1); echo "$XT" | grep -v '^ok ' ; echo "$XT" | grep -q '^xport tests: all [0-9]* passed$' && ok "export/import unit tests ($(echo "$XT" | grep -c '^ok ') checks)" || bad "export/import unit tests"
+P=$HERE/src/usr/local/emhttp/plugins/$NAME
+grep -qx 'SERVICE="disable"' "$P/default.cfg" && ok "new installs start with extra arrays disabled" || bad "default.cfg does not disable extra arrays"
+for e in any_event started stopping; do grep -q '^grep -qs .\^SERVICE="enable". /boot/config/plugins/multiarray/multiarray.cfg ||' "$P/event/$e" && ok "event $e exits at once when not enabled" || bad "event $e is not gated"; done
+for n in 2 3 4 5 6 7 8 9; do grep -q "^Cond=\"(@parse_ini_file('/boot/config/plugins/multiarray/multiarray.cfg')\['SERVICE'\]??'')=='enable' && " "$P/Main$n.page" || bad "Main$n tab not gated by SERVICE"; done; ok "Main2..Main9 tabs only when enabled"
+grep -q '^  hotplug|refresh|start|restart|setup|gen-pages|hostfilter)$' "$P/scripts/multiarray" && ok "multiarray: hotplug/refresh/start/setup return at once when not enabled" || bad "multiarray dispatcher not gated"
+grep -q 'scripts/multiarray setup' "$PLG" && ! grep -q 'curl' "$PLG" && ok ".plg: drivers, tabs and start only through 'multiarray setup' when enabled" || bad ".plg still does work when disabled"
+[ -f "$PKG" ] && { grep -q "plugins/$NAME/MultiArrayXport.page" <<<"$LIST" && grep -q "plugins/$NAME/help/why-virtual.txt" <<<"$LIST" && ok "package holds the Export and import tab and the Why text" || bad "Export tab or Why text missing from the package"; }
+grep -q 'Lime Technology' "$P/MultiArrayXport.page" && grep -q 'Lime Technology' "$P/help/why-virtual.txt" && ok "export/import texts carry the disclaimer" || bad "disclaimer missing in export/import texts"
 [ -s "$HERE/icon.png" ] && ok "icon.png" || bad "icon.png"
 for f in "$HERE"/docs/screenshots/*.png; do grep -q "docs/screenshots/$(basename "$f"))" "$HERE/README.md" && ok "README shows $(basename "$f")" || bad "README lacks $f"; done
 [ $fail -eq 0 ] && echo "all checks passed" || { echo "checks FAILED"; exit 1; }

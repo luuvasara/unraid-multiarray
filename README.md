@@ -26,7 +26,7 @@ Each array is already a self-contained unit, so a second one only needs a second
 | Main tab | Main2, Main3 … are generated at install from the stock Main page of the running Unraid version, so they look and behave the same |
 | Disks | Settings › Multi Arrays: pin each disk to an array; an array only sees its pinned disks |
 
-No Unraid file is modified. The whole plugin is under 800 lines of shell and PHP.
+No Unraid file is modified. The whole plugin, export and import included, is about 1,600 lines of shell and PHP.
 Arrays never need to coordinate with each other: moving data between them is an ordinary copy
 between two mount points.
 
@@ -48,7 +48,8 @@ Main2: the operation panel of array 2.
 
 1. Install: Plugins › Install Plugin, paste
    `https://raw.githubusercontent.com/luuvasara/unraid-multiarray/main/multiarray.plg`
-2. Settings › Multi Arrays: set the number of arrays and pin disks to each one (Apply takes effect immediately).
+2. Settings › Multi Arrays: enable multi arrays, set the number of arrays and pin disks to each one (Apply takes effect immediately).
+   Until you enable them, the plugin does nothing at all: no drivers, no Main tabs, no background work.
 3. Open Main2: assign disks and start the array, exactly as on Main.
 
 Each extra array also has its own, standard Unraid web GUI with the normal login, on port 8081
@@ -60,6 +61,22 @@ picked up automatically.
 - Config: `/boot/config/plugins/multiarray/multiarray.cfg`; array N's own settings: `/boot/config/plugins/multiarray/arrayN/`
 - CLI: `/usr/local/emhttp/plugins/multiarray/scripts/multiarray start|stop|status|refresh [N|all]`
 - Log: `/var/log/multiarray.log`
+
+## Export and import an array
+
+Settings › Multi Arrays › Export and import moves a whole array to another server, or onto this one as an extra array.
+
+- **Export** writes a small JSON file: which disk is in which slot (Unraid's disk id, serial number and size, the
+  things Unraid itself checks), the partition layout, file system and encryption UUIDs, and the array's settings.
+  It only reads, and it works without enabling extra arrays. It never contains keys, passphrases, passwords or files.
+  It refuses an array that is not clean (a disk disabled, missing or emulated, a sync running, parity never valid),
+  and an array on a VM's virtual disks, with a plain explanation of why such an array has to be copied instead.
+  From a terminal: `/usr/local/emhttp/plugins/multiarray/scripts/multiarray export N file.json` (1 = the main array).
+- **Import** takes that file on the target server. The target is an extra array that is stopped and has no disks
+  assigned or pinned, or the main array of a fresh server. Every slot must find exactly one free disk with the same
+  serial number and size. The plan is shown first and nothing changes before you confirm; the assignments go through
+  Unraid's own commands, the same ones the Main page sends. Then the array can be started with "Parity is already
+  valid" and checked with a read-only parity check. Import never formats a disk and never starts a parity sync.
 
 ## Status
 
@@ -78,7 +95,7 @@ Not yet:
 
 - `src/`: package root (extracted to `/`)
 - `build.sh`: builds `packages/multiarray-<version>-x86_64-1.txz` with `kit/bin/build.sh`, writes its MD5 into `multiarray.plg` and `CHANGELOG.md` from the `.plg`'s `<CHANGES>` (bump the version in the `.plg` on every change)
-- `tests/run-tests.sh`: lint, and the `.plg` and package checks; `tests/render-test.sh` renders the About tab in headless Chrome
+- `tests/run-tests.sh`: lint, the `.plg` and package checks and the export/import unit tests (`tests/xport-test.php`); `tests/render-test.sh` renders the About tab in headless Chrome
 - `kit/`: the shared plugin kit (build, lint, About tab)
 - `driver/md_unraid2.patch`: the change to Unraid's md driver that lets a numbered copy run next to the original
 - `build/build-ko.sh KERNEL_TREE MD_SOURCE_DIR N...`: build the driver copies `ko/<kernel>/md_unraidN.ko` for a kernel

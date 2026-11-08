@@ -1,0 +1,52 @@
+#!/usr/bin/php -q
+<?PHP
+/* xport: export / import of a whole array (see include/xport.php). Also reached as 'multiarray export|import ...'.
+ *   xport export N [FILE]           JSON of array N on stdout or into FILE (only when exported; 1 = main array); refusal on stderr, exit 1
+ *   xport plan FILE N               show which disk would go into which slot of array N; prints the confirm code
+ *   xport apply FILE N CODE         assign the disks (only with the confirm code the plan printed)
+ *   xport start FILE N              start the imported array N with "Parity is already valid"
+ *   xport check N                   start a read-only parity check (no corrections written) */
+require_once '/usr/local/emhttp/plugins/multiarray/include/xport.php';
+$a = array_slice($argv, 1);
+function out($s) { fwrite(STDOUT, $s."\n"); }
+function err($s) { fwrite(STDERR, $s."\n"); }
+/* Unraid's PHP prepend changes the working directory: relative paths are taken from the shell's (PWD) */
+function abspath($f) { return ($f === '' || $f[0] === '/' || !getenv('PWD')) ? $f : getenv('PWD').'/'.$f; }
+function load($f) { $f = abspath($f); $d = json_decode((string)@file_get_contents($f), true); if (!is_array($d)) { err("$f: not a JSON file"); exit(1); } return $d; }
+function pver() { return trim((string)@shell_exec("sed -n 's/^<!ENTITY version *\"\\([^\"]*\\)\">.*/\\1/p' /boot/config/plugins/multiarray.plg 2>/dev/null")); }
+switch ($a[0] ?? '') {
+case 'export':
+  $r = ma_x_export((int)($a[1] ?? 0), null, pver());
+  if (!$r['ok']) {
+    err($r['error']); foreach ($r['reasons'] as $x) err("  - $x");
+    if (!empty($r['why'])) err('Why? See /usr/local/emhttp/plugins/multiarray/help/why-virtual.txt or Settings > Multi Arrays > Export and import.');
+    exit(1);
+  }
+  foreach ($r['warnings'] as $w) err("warning: $w");
+  $j = json_encode($r['data'], JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES)."\n";
+  if (($a[2] ?? '') !== '') { $a[2] = abspath($a[2]); if (file_put_contents($a[2], $j) === false) { err("could not write {$a[2]}"); exit(1); } err("exported array {$r['data']['array']} to {$a[2]}"); }
+  else fwrite(STDOUT, $j);
+  exit(0);
+case 'plan':
+  $p = ma_x_plan(load($a[1] ?? ''), (int)($a[2] ?? 0));
+  foreach ($p['rows'] as $r) out(sprintf('%-8s serial %-24s -> %s', $r['role'], $r['want']['serial'],
+    $r['disk'] ? "{$r['disk']['device']}  {$r['disk']['id']}  ".implode(' ', $r['disk']['by_id'])."  {$r['disk']['size_kb']} KiB  {$r['disk']['model']}" : 'NO MATCH: '.$r['problem']));
+  foreach ($p['problems'] as $x) err("problem: $x");
+  foreach ($p['warnings'] ?? [] as $w) err("warning from the export: $w");
+  if (!$p['ok']) { err('nothing can be imported until every problem is solved'); exit(1); }
+  out('confirm code: '.ma_x_plan_hash($p));
+  exit(0);
+case 'apply':
+  $r = ma_x_apply(load($a[1] ?? ''), (int)($a[2] ?? 0), $a[3] ?? '');
+  foreach ($r['log'] as $l) out($l);
+  if (!$r['ok']) { err($r['error']); exit(1); }
+  exit(0);
+case 'start':
+  $r = ma_x_start(load($a[1] ?? ''), (int)($a[2] ?? 0));
+  out(json_encode($r)); exit($r['ok'] ? 0 : 1);
+case 'check':
+  $r = ma_x_check((int)($a[1] ?? 0));
+  out(json_encode($r)); exit($r['ok'] ? 0 : 1);
+default:
+  err('usage: xport export N | plan FILE N | apply FILE N CODE | start FILE N | check N'); exit(2);
+}

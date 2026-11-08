@@ -26,10 +26,11 @@ foreach ($devs as $d) { $id = ma_byid($d['device'] ?? ''); if ($id) $choices[$id
 uasort($choices, function($a,$b){ return strnatcmp($a['device'],$b['device']); });
 ?>
 <p style="max-width:60em"><strong>Disclaimer:</strong> Multi Arrays is an independent project, not made or supported by Lime Technology. Neither its author nor Lime Technology takes any responsibility for any results caused by this plugin or its implementation. It is a proof of concept, meant only to show how simple support for multiple arrays could be. If that doesn&#39;t sit well with you, wait for the official support for multiple arrays in Unraid.</p>
-<form method="POST" action="/update.php" target="progressFrame" onsubmit="maCollect()">
+<form method="POST" action="/update.php" target="progressFrame" onsubmit="return maCollect(this)">
 <input type="hidden" name="#file" value="multiarray/multiarray.cfg">
 <input type="hidden" name="#command" value="/plugins/multiarray/scripts/multiarray">
-<input type="hidden" name="#arg[1]" value="refresh">
+<input type="hidden" name="#arg[1]" value="apply">
+<p style="max-width:60em">Extra arrays are off until you enable them here. While off, the plugin does nothing at all: no drivers, no Main tabs, no background work. Export and import (next tab) work either way. Disabling stops the extra arrays' management instances and removes their tabs; their arrays must be stopped first.</p>
 <dl><dt>Enable multi arrays:</dt><dd><select name="SERVICE"><?=mk_option($cfg['SERVICE'],'enable','Yes')?><?=mk_option($cfg['SERVICE'],'disable','No')?></select></dd></dl>
 
 <dl><dt>Total number of arrays (including the main array, 1-9):</dt><dd><input type="number" name="ARRAYS" min="1" max="9" value="<?=htmlspecialchars($cfg['ARRAYS'])?>" class="narrow"></dd></dl>
@@ -68,12 +69,20 @@ $rows = $choices; foreach ($pin as $id=>$n) if (!isset($rows[$id])) $rows[$id] =
 </form>
 
 <script>
-function maCollect(){
+var maWasOn = <?=json_encode(($cfg['SERVICE'] ?? '') === 'enable')?>;
+function maCollect(form){
+  if (maWasOn && form.SERVICE.value != 'enable') {   /* disabling: refuse while an extra array is started (the script checks again) */
+    var busy = [];
+    $.ajax({url:'/plugins/multiarray/include/ctl.php?action=status', dataType:'json', async:false, success:function(d){
+      d.forEach(function(i){ if (i.running && i.mdState == 'STARTED') busy.push(i.n); }); }});
+    if (busy.length) { swal({title:'Stop the extra arrays first', text:busy.length>1?'Arrays '+busy.join(', ')+' are started. Stop them on their Main tabs, then disable Multi Arrays.':'Array '+busy[0]+' is started. Stop it on its Main tab, then disable Multi Arrays.', type:'warning'}); return false; }
+  }
   $('input[id^=ma-d]').each(function(){
     var n=this.id.substr(4), v=[];
     $('input.ma-pin:checked').each(function(){ if (this.value==n) v.push($(this).data('id')); });
     this.value=v.join(' ');
   });
+  return true;
 }
 </script>
 
