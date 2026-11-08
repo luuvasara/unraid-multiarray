@@ -152,6 +152,11 @@ prepare() {      # volatile per-start files in RAM
   for f in /etc/rc.d/rc.*; do case ${f##*/} in
     rc.nginx|rc.php-fpm|rc.runlog|rc.library.source) cp -p $f $R/rc.d/ ;;
     *) cp $PLUG/seed/noop $R/rc.d/${f##*/} ;; esac; done
+  # the instance's own GUI listens on loopback only: everything else goes through the host GUI, where the guards run.
+  # rc.nginx's listen() is replaced in the copy; if the stock file changed shape, the instance gets no GUI at all.
+  if grep -q '^# create redirect server blocks$' $R/rc.d/rc.nginx && grep -q '^listen(){$' $R/rc.d/rc.nginx; then
+    sed -i '/^# create redirect server blocks$/i # multiarray: loopback only\nlisten(){ local T="    "; if [[ $1 == lo ]]; then echo "${T}listen 127.0.0.1:$PORT; # lo"; echo "${T}listen 127.0.0.1:$PORTSSL; # lo"; else echo "${T}listen 127.0.0.1:$*;"; fi; }\n' $R/rc.d/rc.nginx
+  else cp $PLUG/seed/noop $R/rc.d/rc.nginx; log "a$N: rc.nginx changed, instance GUI not started"; fi
   # nginx: private copy; php sees a distinct HTTP_HOST so the session cookie name differs from the host GUI's
   cp -a /etc/nginx $R/etc-nginx
   echo "fastcgi_param  HTTP_HOST        multiarray-a$N.invalid;" >> $R/etc-nginx/fastcgi_params

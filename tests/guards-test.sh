@@ -47,4 +47,10 @@ got=$(bash -c ". $P/scripts/lib.sh 2>/dev/null; zfs_pool_names $T/disks.ini" | t
 [ "$got" = "cache disk1 disk2 " ] && ok "zfs pool names of an array: slot names for array disks, the pool name for pool members" || bad "zfs_pool_names gave '$got'"
 # udev rule covers partitions; md_is_stopped unchanged
 ! grep -q 'DEVTYPE' $HERE/src/etc/udev/rules.d/99-multiarray.rules && ok "udev rule refreshes on partitions too" || bad "udev rule matches whole disks only"
+# instance GUI on loopback only: apply prepare()'s rc.nginx edit to a stub with the stock shape
+printf '#!/bin/bash\nlisten(){\n  echo "listen $*;"\n}\n\n# create redirect server blocks\nPORT=8081 PORTSSL=9083\necho "$(listen lo)"; echo "$(listen $PORT default_server)"\n' > $T/rc.nginx
+cmd=$(grep -o "sed -i '/^# create redirect server blocks\$/i # multiarray: loopback only[^']*' " $P/scripts/multiarray)
+eval "${cmd% } $T/rc.nginx"; out=$(bash $T/rc.nginx | tr -s ' ' | tr '\n' '|')
+[ "$out" = " listen 127.0.0.1:8081; # lo| listen 127.0.0.1:9083; # lo| listen 127.0.0.1:8081 default_server;|" ] && ok "instance nginx listens on 127.0.0.1 only" || bad "instance nginx listen: '$out'"
+grep -q "multiarray guard" $P/include/toggle.php && grep -q "multiarray guard" $P/include/update.php && ok "toggle.php and update.php run the guard" || bad "an endpoint without the guard"
 [ $f -eq 0 ] && echo "guards tests: all $n passed" || { echo "guards tests: $f failed"; exit 1; }

@@ -58,12 +58,11 @@ $rows = $choices; foreach ($pin as $id=>$n) if (!isset($rows[$id])) $rows[$id] =
 </dd></dl>
 <div class="title"><span class="left"><i class="fa fa-bug title"></i>Debug</span></div>
 <dl><dt>First instance GUI port (array 2; array N uses port + N - 2):</dt><dd><input type="number" name="BASEPORT" min="1024" max="65000" value="<?=htmlspecialchars($cfg['BASEPORT'])?>" class="narrow"></dd></dl>
-<dl><dt>Instance GUIs (each extra array's own, unmodified Unraid web GUI; for debugging and for pages the MainN tabs lack, e.g. per-disk pages and parity history. Separate login; only its Main tab is meaningful):</dt><dd>
+<dl><dt>Instance GUIs (each extra array's own, unmodified Unraid web GUI; for debugging only. They listen on the server's loopback address, so use the MainN tabs; for debugging, open an SSH tunnel, e.g. <code>ssh -L 8081:127.0.0.1:8081 root@server</code>, then http://localhost:8081):</dt><dd>
 <?for ($n=2; $n<=$total; $n++): $p = (int)$cfg['BASEPORT'] + $n - 2;?>
-  <a class="ma-inst" data-port="<?=$p?>" href="#" target="_blank">Array <?=$n?> instance GUI (port <?=$p?>)</a><?=ma_ready($n)?'':' &mdash; instance not running'?><br>
+  Array <?=$n?>: 127.0.0.1:<?=$p?><?=ma_ready($n)?'':' &mdash; instance not running'?><br>
 <?endfor;?>
 </dd></dl>
-<script>$('a.ma-inst').each(function(){this.href=location.protocol+'//'+location.hostname+':'+$(this).data('port')+'/Main';});</script>
 
 <dl><dt>&nbsp;</dt><dd><input type="submit" value="Apply"><input type="button" value="Done" onclick="done()"></dd></dl>
 </form>

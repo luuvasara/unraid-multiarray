@@ -12,4 +12,6 @@ default:
   if (substr($name,-1) != '*') { $c = "cmdSpin{$action}=".urlencode($name); break; }
   $c = "cmdSpin{$action}All=Apply&poolName=".urlencode(substr($name,0,-1));
 }
+exec('/usr/local/emhttp/plugins/multiarray/scripts/multiarray guard '.$n.' '.escapeshellarg($c).' 2>&1', $why, $rc);   // same guard as update.php
+if ($rc !== 0) { http_response_code(409); echo implode("\n", $why); exit; }
 ma_cmd($n, $c);
