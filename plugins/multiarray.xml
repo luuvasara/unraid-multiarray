@@ -12,7 +12,7 @@
   <ExtraSearchTerms>array parity second array multiple arrays md pool main</ExtraSearchTerms>
   <Overview>Proof of concept. Do not install this on a production server. It exists to show that multiple arrays are within easy reach for Unraid itself, not to replace built-in support. Use a test machine or a VM with disks you don't care about.
 
-Disclaimer: Multi Arrays is an independent project, not made or supported by Lime Technology. Neither its author nor Lime Technology takes any responsibility for any results caused by this plugin or its implementation. If that doesn't sit well with you, wait for the official support for multiple arrays in Unraid.
+Disclaimer: Multi Arrays is an independent project, not made or supported by Lime Technology. Neither its author nor Lime Technology takes any responsibility for any results caused by this plugin or its implementation. It is a proof of concept, meant only to show how simple support for multiple arrays could be. If that doesn't sit well with you, wait for the official support for multiple arrays in Unraid.
 
 Runs several independent parity-protected arrays on one Unraid server (default: three), each with its own Main tab: Main, Main2, Main3.
 

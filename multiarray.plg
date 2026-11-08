@@ -2,16 +2,16 @@
 <!DOCTYPE PLUGIN [
 <!ENTITY name    "multiarray">
 <!ENTITY author  "Multi Arrays project">
-<!ENTITY version "2026.11.08a">
+<!ENTITY version "2026.11.08b">
 <!ENTITY source  "https://raw.githubusercontent.com/luuvasara/unraid-multiarray/main">
 <!ENTITY base    "/boot/config/plugins/&name;">
-<!ENTITY md5     "bf427f2b59d8c78cd59347e5fc9447f5">
+<!ENTITY md5     "8a4dfd026437e332d91d89158e7aa67b">
 ]>
 <PLUGIN name="&name;" author="&author;" version="&version;" min="7.3.0" icon="server" launch="Settings/MultiArray" pluginURL="&source;/&name;.plg" support="https://github.com/luuvasara/unraid-multiarray/issues">
 
 <CHANGES>
-###2026.11.08a
-- A disclaimer on the settings page, in the install output, the About tab and the README: Multi Arrays is an independent project, not made or supported by Lime Technology. Neither its author nor Lime Technology takes any responsibility for any results caused by this plugin or its implementation. If that doesn't sit well with you, wait for the official support for multiple arrays in Unraid.
+###2026.11.08b
+- A disclaimer on the settings page, in the install output, the About tab and the README: Multi Arrays is an independent project, not made or supported by Lime Technology. Neither its author nor Lime Technology takes any responsibility for any results caused by this plugin or its implementation. It is a proof of concept, meant only to show how simple support for multiple arrays could be. If that doesn't sit well with you, wait for the official support for multiple arrays in Unraid.
 ###2026.11.06a
 - New About tab under Settings, Multi Arrays: the installed version, the latest changes and links. Updates print the latest changes in a box at the end of the install output.
 - Screenshots in the README show one panel each.
@@ -65,7 +65,7 @@ udevadm control --reload 2&gt;/dev/null
 grep -q '^mdState="STARTED"' /var/local/emhttp/var.ini 2>/dev/null &amp;&amp; ( setsid /usr/local/emhttp/plugins/&name;/scripts/multiarray start all &gt;/dev/null 2&gt;&amp;1 &lt;/dev/null &amp; )
 MODE=; OLD=
 read -r MODE OLD 2&gt;/dev/null &lt;/var/run/&name;/install-from
-echo "Disclaimer: Multi Arrays is an independent project, not made or supported by Lime Technology. Neither its author nor Lime Technology takes any responsibility for any results caused by this plugin or its implementation. If that doesn't sit well with you, wait for the official support for multiple arrays in Unraid."
+echo "Disclaimer: Multi Arrays is an independent project, not made or supported by Lime Technology. Neither its author nor Lime Technology takes any responsibility for any results caused by this plugin or its implementation. It is a proof of concept, meant only to show how simple support for multiple arrays could be. If that doesn't sit well with you, wait for the official support for multiple arrays in Unraid."
 /usr/local/emhttp/plugins/&name;/kit/install-notes.sh "&version;" "$MODE" "$OLD"
 rm -f /var/run/&name;/install-from
 exit 0

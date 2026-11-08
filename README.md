@@ -12,7 +12,7 @@ its own Main tab: Main, Main2, Main3.
 >
 > The webGUI side of this is proposed upstream in [unraid/webgui#2813](https://github.com/unraid/webgui/pull/2813).
 
-> **Disclaimer:** Multi Arrays is an independent project, not made or supported by Lime Technology. Neither its author nor Lime Technology takes any responsibility for any results caused by this plugin or its implementation. If that doesn't sit well with you, wait for the official support for multiple arrays in Unraid.
+> **Disclaimer:** Multi Arrays is an independent project, not made or supported by Lime Technology. Neither its author nor Lime Technology takes any responsibility for any results caused by this plugin or its implementation. It is a proof of concept, meant only to show how simple support for multiple arrays could be. If that doesn't sit well with you, wait for the official support for multiple arrays in Unraid.
 
 ## It is simpler than it sounds
 

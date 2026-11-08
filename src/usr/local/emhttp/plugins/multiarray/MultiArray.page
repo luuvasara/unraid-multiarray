@@ -25,7 +25,7 @@ $choices = [];
 foreach ($devs as $d) { $id = ma_byid($d['device'] ?? ''); if ($id) $choices[$id] = $d; }
 uasort($choices, function($a,$b){ return strnatcmp($a['device'],$b['device']); });
 ?>
-<p style="max-width:60em"><strong>Disclaimer:</strong> Multi Arrays is an independent project, not made or supported by Lime Technology. Neither its author nor Lime Technology takes any responsibility for any results caused by this plugin or its implementation. If that doesn&#39;t sit well with you, wait for the official support for multiple arrays in Unraid.</p>
+<p style="max-width:60em"><strong>Disclaimer:</strong> Multi Arrays is an independent project, not made or supported by Lime Technology. Neither its author nor Lime Technology takes any responsibility for any results caused by this plugin or its implementation. It is a proof of concept, meant only to show how simple support for multiple arrays could be. If that doesn&#39;t sit well with you, wait for the official support for multiple arrays in Unraid.</p>
 <form method="POST" action="/update.php" target="progressFrame" onsubmit="maCollect()">
 <input type="hidden" name="#file" value="multiarray/multiarray.cfg">
 <input type="hidden" name="#command" value="/plugins/multiarray/scripts/multiarray">
