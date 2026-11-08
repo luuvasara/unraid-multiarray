@@ -53,4 +53,15 @@ cmd=$(grep -o "sed -i '/^# create redirect server blocks\$/i # multiarray: loopb
 eval "${cmd% } $T/rc.nginx"; out=$(bash $T/rc.nginx | tr -s ' ' | tr '\n' '|')
 [ "$out" = " listen 127.0.0.1:8081; # lo| listen 127.0.0.1:9083; # lo| listen 127.0.0.1:8081 default_server;|" ] && ok "instance nginx listens on 127.0.0.1 only" || bad "instance nginx listen: '$out'"
 grep -q "multiarray guard" $P/include/toggle.php && grep -q "multiarray guard" $P/include/update.php && ok "toggle.php and update.php run the guard" || bad "an endpoint without the guard"
+# MainN: no Browse icon may open the host's /mnt/diskN or /mnt/<pool> (stock lines of Unraid 7.3.4 nchan/device_list)
+mkdir -p $T/dx/nchan $T/pl $T/gp; cp $P/default.cfg $T/pl/
+printf 'Menu="Main:1"\n---\nx\n' > $T/dx/ArrayDevices.page; cp $T/dx/ArrayDevices.page $T/dx/ArrayOperation.page; echo x > $T/dx/nchan/parity_list
+cat > $T/dx/nchan/device_list <<'S'
+    $view = "<a class='view' href=\"/Main/Browse?dir=".htmlspecialchars($dir)."\"><i class=\"icon-u-tab\" title=\""._('Browse')." $dir\"></i></a>";
+    $view = "<a class='view' href=\"/Main/Browse?dir=".htmlspecialchars($dir)."\"><i class=\"icon-u-tab\" title=\""._('Browse')." $dir\"></i></a>";
+        $bootBrowseUrl = $bootDir !== '' ? "/Main/Browse?dir=".htmlspecialchars($bootDir) : $bootDeviceUrl;
+        $poolBrowseUrl = $poolDir !== '' ? "/Main/Browse?dir=".htmlspecialchars($poolDir) : $poolDeviceUrl;
+S
+MA_TEST_DX=$T/dx MA_TEST_PL=$T/pl MA_TEST_ROOT=$T/gp php $P/scripts/gen-pages 2 >/dev/null 2>$T/gp.err
+! grep -q '/Main/Browse' $T/pl/nchan/device_list2 && ! grep -q 'Browse' $T/gp.err && grep -q "<a class='view'></a>" $T/pl/nchan/device_list2 && ok "MainN has no Browse link to a host path" || bad "MainN Browse links: $(grep -c /Main/Browse $T/pl/nchan/device_list2) left; $(grep Browse $T/gp.err)"
 [ $f -eq 0 ] && echo "guards tests: all $n passed" || { echo "guards tests: $f failed"; exit 1; }

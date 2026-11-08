@@ -3,10 +3,10 @@
 /* gen-pages [N...]: generate the native Main tabs for extra arrays from the STOCK dynamix sources
  * (ArrayDevices.page, ArrayOperation.page, nchan/device_list, nchan/parity_list) by text substitution.
  * Every substitution must match at least once; a miss means the stock file changed -> logged + exit 1 (see NATIVE-MAIN.md). */
-$PL  = '/usr/local/emhttp/plugins/multiarray';
-$DX  = '/usr/local/emhttp/plugins/dynamix';
+$PL  = getenv('MA_TEST_PL') ?: '/usr/local/emhttp/plugins/multiarray';   // MA_TEST_*: unit tests on a workstation only
+$DX  = getenv('MA_TEST_DX') ?: '/usr/local/emhttp/plugins/dynamix';
 $LIB = "$PL/include/lib.php";
-$R   = '/var/lib/multiarray';
+$R   = getenv('MA_TEST_ROOT') ?: '/var/lib/multiarray';
 $cfg = @parse_ini_file('/boot/config/plugins/multiarray/multiarray.cfg') ?: @parse_ini_file("$PL/default.cfg");
 $arrays = (int)($cfg['ARRAYS'] ?? 3);
 $host = in_array('--host', $argv);
@@ -76,6 +76,14 @@ foreach ($list as $cur) {
   sub($s, "action='/update.htm'", "action='$fwd'", 'device_list form action');
   sub($s, "value='\"._var(\$var,'csrf_token').\"'", "value='\".(@parse_ini_file('/var/local/emhttp/var.ini')['csrf_token']??'').\"'", 'host csrf token in assignment form');
   sub($s, '"/Main/$source?name=$realName"', "\"/Main$N\"", 'per-disk page link (no per-array Device page)');
+  /* Browse icons would open the HOST's /mnt/diskN or /mnt/<pool>: the host cannot see an extra array's mounts */
+  $browse = <<<'X'
+"<a class='view' href=\"/Main/Browse?dir=".htmlspecialchars($dir)."\"><i class=\"icon-u-tab\" title=\""._('Browse')." $dir\"></i></a>"
+X;
+  sub($s, $browse, "\"<a class='view'></a>\"", 'disk Browse links (host paths; removed)');
+  sub($s, '"/Main/Browse?dir=".htmlspecialchars($poolDir) : $poolDeviceUrl', '$poolDeviceUrl : $poolDeviceUrl', 'pool Browse link (host path; removed)');
+  sub($s, '"/Main/Browse?dir=".htmlspecialchars($bootDir) : $bootDeviceUrl', '$bootDeviceUrl : $bootDeviceUrl', 'boot Browse link (host path; removed)');
+  if (strpos($s, '/Main/Browse') !== false) { $miss++; fwrite(STDERR, "gen-pages: a$N: a Browse link to a host path is left in device_list$N\n"); }
   file_put_contents("$PL/nchan/device_list$N", $s); chmod("$PL/nchan/device_list$N", 0755);
 
   /* ---- nchan/parity_list -> nchan/parity_list{N} ---- */
