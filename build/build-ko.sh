@@ -5,7 +5,7 @@
 #   N             : extra array number, 2..9
 # The driver copy for array N is Unraid's md driver with driver/md_unraid2.patch applied and every
 # instance name numbered N: module md_unraidN, /proc/mdcmdN + /proc/mdstatN, its own block major,
-# disk devices md<letter><slot>p1 (b for 2, c for 3, ...).
+# disk devices md<letter><slot>p1 (b for 2, c for 3, ...). Also rewrites src/.../drivers/ko.md5.
 set -e
 KDIR=$(readlink -f "${1:?kernel tree}"); MDS=$(readlink -f "${2:?md source dir}"); shift 2
 D=$(dirname "$(readlink -f "$0")")/..
@@ -24,3 +24,5 @@ for N in "$@"; do
   make -s -C "$KDIR" M="$W" KBUILD_MODPOST_WARN=1 modules
   cp "$W/md_unraid$N.ko" "$OUTD/"; echo "$OUTD/md_unraid$N.ko $(modinfo -F vermagic "$W/md_unraid$N.ko")"
 done
+# the package lists the md5 of every driver build, so that an update replaces a cached older build on the flash
+(cd "$D/ko" && find . -name 'md_unraid*.ko' | sed 's|^\./||' | sort | xargs md5sum) > "$D/src/usr/local/emhttp/plugins/multiarray/drivers/ko.md5"

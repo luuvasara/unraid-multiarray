@@ -267,7 +267,16 @@
  		return -EINVAL;
  	}
  
-@@ -1059,7 +1060,7 @@
+@@ -1054,12 +1055,16 @@
+ 			int unit = disk->number;
+                         int ret;
+ 
++			if (IS_ERR(gd)) {
++				printk("mdb%dp1: blk_alloc_disk failed: %ld\n", unit, PTR_ERR(gd));
++				return PTR_ERR(gd);
++			}
+ 			mddev->gendisk[unit] = gd;
+ 
  			gd->major = MAJOR(mddev->dev);
  			gd->first_minor = unit;
                          gd->minors = 1;
@@ -276,16 +285,24 @@
  			gd->fops = &md_fops;
  			gd->private_data = mddev;
  			gd->queue->queuedata = mddev;
-@@ -1069,7 +1070,7 @@
+@@ -1069,7 +1074,15 @@
                          set_capacity(gd, disk->size*2);
                          
  			ret = add_disk(gd);
 -			printk("md%dp1: running, size: %llu blocks\n", unit, disk->size);
++			if (ret) {
++				/* a disk that add_disk refused is not live: del_gendisk would only warn and
++				 * return, so drop it here and fail the start (start_array then runs do_stop) */
++				printk("mdb%dp1: add_disk failed: %d\n", unit, ret);
++				mddev->gendisk[unit] = NULL;
++				put_disk(gd);
++				return ret;
++			}
 +			printk("mdb%dp1: running, size: %llu blocks\n", unit, disk->size);
  		}
  	}
  	
-@@ -1087,7 +1088,7 @@
+@@ -1087,7 +1100,7 @@
                  int unit = disk->number;
  
                  if (mddev->gendisk[unit]) {
@@ -294,7 +311,7 @@
  
  			del_gendisk(mddev->gendisk[unit]);
  			put_disk(mddev->gendisk[unit]);
-@@ -1124,9 +1125,9 @@
+@@ -1124,9 +1137,9 @@
          
          /* limit number of messages generated */
          if (sb->sync_errs <= SYNC_ERROR_LIMIT)
@@ -306,7 +323,7 @@
  }
  
  /* called when a stripe sync completes */
-@@ -1179,13 +1180,13 @@
+@@ -1179,13 +1192,13 @@
  			mark[last_mark] = jiffies;
  			mark_cnt[last_mark] = mddev->curr_resync - atomic_read(&mddev->recovery_active);
  
@@ -322,7 +339,7 @@
  			flush_signals(current);
  			err = -EINTR;
  			break;
-@@ -1206,7 +1207,7 @@
+@@ -1206,7 +1219,7 @@
  
  	/* if nothing to resync, get out now */
  	if (!mddev->recovery_size) {
@@ -331,7 +348,7 @@
  		return;
  	}
  
-@@ -1214,11 +1215,11 @@
+@@ -1214,11 +1227,11 @@
  	 * or -EINTR if the process was interrupted with a signal.
  	 */
  	if (mutex_lock_interruptible(&mddev->recovery_sem)) {
@@ -345,7 +362,7 @@
  	mddev->recovery_running = mddev->recovery_size*2; /* count of sectors */
  
          /* record start of resync */
-@@ -1255,7 +1256,7 @@
+@@ -1255,7 +1268,7 @@
                  }
  
                  mddev->curr_resync = 0;
@@ -354,7 +371,7 @@
  	}
  
  	/* record sync result */
-@@ -1264,7 +1265,7 @@
+@@ -1264,7 +1277,7 @@
  	mddev->recovery_running = 0;
  	mutex_unlock(&mddev->recovery_sem);
  
@@ -363,7 +380,7 @@
  }
  
  /****************************************************************************/
-@@ -1279,19 +1280,19 @@
+@@ -1279,19 +1292,19 @@
          int update_sb = 0;
  
  	if (mddev->private) {
@@ -386,7 +403,7 @@
  		return -EINVAL;
  	}
  	
-@@ -1302,9 +1303,9 @@
+@@ -1302,9 +1315,9 @@
  		int i;
  
                  if (invalidslota != MD_SB_P_IDX)
@@ -398,7 +415,7 @@
  
                  sb->num_disks = 2;
                  mddev->num_disabled = 0;
-@@ -1528,7 +1529,7 @@
+@@ -1528,7 +1541,7 @@
  	/* check if still in use */
  	active = atomic_read(&mddev->active);
  	if (active) {
@@ -407,7 +424,7 @@
  		return -EBUSY;
  	}
  
-@@ -1559,11 +1560,11 @@
+@@ -1559,11 +1572,11 @@
          int recovery_option, recovery_resume;
  
  	if (!mddev->private) {
@@ -421,7 +438,7 @@
  		return -EINVAL;
  	}
  
-@@ -1580,12 +1581,12 @@
+@@ -1580,12 +1593,12 @@
                  recovery_resume = 1;
  	}
  	else {
@@ -436,7 +453,7 @@
  		return -EINVAL;
  	}
  
-@@ -1617,7 +1618,7 @@
+@@ -1617,7 +1630,7 @@
          int recovery_pause;
  
  	if (!mddev->private) {
@@ -445,7 +462,7 @@
  		return -EINVAL;
  	}
  
-@@ -1627,7 +1628,7 @@
+@@ -1627,7 +1640,7 @@
  	else if (strcasecmp(option, "PAUSE") == 0)
  		recovery_pause = 1;
  	else {
@@ -454,7 +471,7 @@
  		return -EINVAL;
  	}
  
-@@ -1649,12 +1650,12 @@
+@@ -1649,12 +1662,12 @@
  	mddev_t *mddev = dev_to_mddev(array_dev);
  
  	if (mddev->private) {
@@ -469,7 +486,7 @@
  		return -EINVAL;
          }
  
-@@ -1836,7 +1837,7 @@
+@@ -1836,7 +1849,7 @@
  
          seq_printf(seq, "diskNumber.%d=%d\n", number, number);
  	if ((disk_active(disk) || disk_enabled(disk)) && !is_parity_idx(number))
@@ -478,7 +495,7 @@
  	else
  		seq_printf(seq, "diskName.%d=\n", number);
  	seq_printf(seq, "diskSize.%d=%llu\n", number, disk->size);
-@@ -1941,7 +1942,7 @@
+@@ -1941,7 +1954,7 @@
  	cmd_seq++;
  	
  	if (md_trace)
@@ -487,7 +504,7 @@
  	
  	if (!strcmp("set", token)) {
  		char *name = "";
-@@ -2185,12 +2186,12 @@
+@@ -2185,12 +2198,12 @@
  static int md_notify_reboot(struct notifier_block *this,
  			    unsigned long code, void *x)
  {
@@ -502,7 +519,7 @@
  		stop_array(MKDEV(MAJOR_NR,0), 1);
  	}
  	return NOTIFY_DONE;
-@@ -2204,38 +2205,45 @@
+@@ -2204,38 +2217,59 @@
  
  static int __init md_init(void)
  {
@@ -549,9 +566,23 @@
 -	free_mddev(dev_to_mddev(MKDEV(MAJOR_NR,0)));
 -	remove_proc_entry("mdcmd", NULL);
 -	remove_proc_entry("mdstat", NULL);
-+	free_mddev(dev_to_mddev(MKDEV(md2_major,0)));
++	mddev_t *mddev = dev_to_mddev(MKDEV(md2_major,0));
++
++	/* no new commands; remove_proc_entry waits for a running one */
 +	remove_proc_entry("mdcmd2", NULL);
 +	remove_proc_entry("mdstat2", NULL);
++
++	/* The module can be removed while the array is started: an md disk holds a module
++	 * reference only while it is open, so nothing stops rmmod once its file system is
++	 * unmounted. Its gendisks would outlive the module (sysfs /dev/block/<major>:<unit>
++	 * stays, fops point into freed memory), so stop the array first. */
++	if (mddev->private) {
++		printk("md2: driver removed while started, stopping the array\n");
++		if (stop_array(MKDEV(md2_major,0), 0))
++			printk("md2: stop on removal failed, md devices left behind\n");
++	}
++
++	free_mddev(mddev);
  	unregister_reboot_notifier(&md_notifier);
  	destroy_workqueue(md_wq);
 -	unregister_blkdev(MAJOR_NR, "md");
@@ -562,7 +593,7 @@
  }
  
  module_init(md_init);
-@@ -2243,7 +2251,6 @@
+@@ -2243,7 +2277,6 @@
  		
  /****************************************************************************/
  

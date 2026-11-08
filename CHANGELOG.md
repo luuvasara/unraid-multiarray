@@ -2,6 +2,10 @@
 
 Copied by the build from the <CHANGES> block of multiarray.plg; edit the .plg, not this file.
 
+## 2026.11.08g
+- Fix: stopping an extra array while it was still starting could leave its disks behind in the kernel. Until a reboot, that array's disk1 could then not be mounted, and stopping it again or listing disks (lsblk) caused kernel errors. The driver now stops a started array when it is unloaded and gives up a disk it could not add, and the plugin waits for a start in progress before it stops an array.
+- Updates replace the cached driver files on the flash when the package brings a new build of them.
+- Stopping an array whose state is a stopped but degraded one (for example a disabled disk) no longer waits five minutes and reports that it did not stop cleanly.
 ## 2026.11.08f
 - New Disks tab (Settings, Multi Arrays, Disks): every disk grouped by where it belongs (each array in slot order, pools, unassigned, not usable), with size, model, serial, temperature and SMART health as Unraid last read them (a sleeping disk is not woken), controller, port and enclosure bay. Details shows every name a disk goes by; the search box marks every disk a name, a bay or a log line can mean.
 - Locate: reads one disk for 20 seconds so its activity light flashes. Read only, one disk at a time, cancellable; it asks first when the disk is asleep.
