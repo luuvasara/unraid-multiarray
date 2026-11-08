@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <CommunityApplications>
-  <Profile>Multi Arrays for Unraid is a proof of concept: it runs more than one independent array on one server, each with its own Main tab. Not for production servers. Support and questions: the GitHub issues of this repository.</Profile>
+  <Profile>Multi Arrays for Unraid is a proof of concept: it runs more than one independent array on one server, each with its own Main tab. Not for production servers. Multi Arrays is an independent project, not made or supported by Lime Technology. Neither its author nor Lime Technology takes any responsibility for any results caused by this plugin or its implementation. If that doesn't sit well with you, wait for the official support for multiple arrays in Unraid. Support and questions: the GitHub issues of this repository.</Profile>
   <Icon>https://raw.githubusercontent.com/luuvasara/unraid-multiarray/main/icon.png</Icon>
   <WebPage>https://github.com/luuvasara/unraid-multiarray</WebPage>
 </CommunityApplications>
