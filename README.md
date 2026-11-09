@@ -15,6 +15,14 @@ its own Main tab: Main, Main2, Main3.
 >
 > The webGUI side of this is proposed upstream in [unraid/webgui#2813](https://github.com/unraid/webgui/pull/2813).
 
+## Operating principle
+
+The plugin works on one principle: nothing it changes touches the arrays or the data on them. Apart from keeping the arrays apart from each other, every action uses Unraid's own, unchanged tools, commands, checks, limits and evaluations, exactly as they work on a single array. The only additions are the export/import tool and safety checks that stop arrays from interfering with each other.
+
+Installing the plugin does nothing: it stays inert and switched off, and only export works. Even switching it on and building or importing arrays shouldn't affect anything beyond assembling those arrays. An import only fills in the array's disk assignments for you, the same assignments you would otherwise pick on the Main tab. Checking that they are right is still up to you, just as it is when you operate a single array.
+
+Problems can still come from side effects nobody foresaw, between Unraid itself and other plugins. What the plugin can't reasonably guard against is a failed assembly, selecting the wrong disks, or formatting them.
+
 ## It is simpler than it sounds
 
 Each array is already a self-contained unit, so a second one only needs a second copy of the same stack:
