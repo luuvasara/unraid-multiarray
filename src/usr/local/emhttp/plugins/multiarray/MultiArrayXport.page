@@ -141,6 +141,7 @@ confirms the import.</p>
         });
       }
       if (p.warnings&&p.warnings.length){line(box,'ma-warn',detected?'Notes from the detection:':'Warnings recorded at export:'); list(box,p.warnings,'ma-warn');}
+      if (p.notes&&p.notes.length){line(box,'ma-warn','Pools and shares of the exported array (the import assigns the array slots only, so a pool is never formatted by mistake):'); list(box,p.notes,'ma-warn');}
       if (!p.ok){line(box,'ma-bad','Nothing can be imported:'); list(box,p.problems,'ma-bad'); return;}
       if (p.encrypted) line(box,'ma-warn','The array is encrypted: after the import, start it from its Main tab with its passphrase and "Parity is already valid".');
       line(box,'ma-good','Every slot has exactly one matching free disk. Nothing has been changed yet.');

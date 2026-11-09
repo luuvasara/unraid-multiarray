@@ -33,6 +33,7 @@ case 'plan':
     $r['disk'] ? "{$r['disk']['device']}  {$r['disk']['id']}  ".implode(' ', $r['disk']['by_id'])."  {$r['disk']['size_kb']} KiB  {$r['disk']['model']}" : 'NO MATCH: '.$r['problem']));
   foreach ($p['problems'] as $x) err("problem: $x");
   foreach ($p['warnings'] ?? [] as $w) err("warning from the export: $w");
+  foreach ($p['notes'] ?? [] as $w) err("note: $w");
   if (!$p['ok']) { err('nothing can be imported until every problem is solved'); exit(1); }
   out('confirm code: '.ma_x_plan_hash($p));
   exit(0);

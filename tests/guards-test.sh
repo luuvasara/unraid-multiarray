@@ -69,4 +69,14 @@ printf '%s\n' 'require_once "$docroot/webGui/include/publish.php";' '$devs   = (
 MA_TEST_DX=$T/dx MA_TEST_PL=$T/pl MA_TEST_ROOT=$T/gp php $P/scripts/gen-pages --host 2>/dev/null; cp $T/gp/host/device_list $T/dx/nchan/device_list
 MA_TEST_DX=$T/dx MA_TEST_PL=$T/pl MA_TEST_ROOT=$T/gp php $P/scripts/gen-pages 2 >/dev/null 2>&1
 grep -q ma_filter_devs $T/dx/nchan/device_list && ! grep -q 'ma_filter_devs\|multiarray/include/lib.php' $T/pl/nchan/device_list2 && ok "array N's device list has no host disk filter, even while it is mounted" || bad "device_list2 carries the host filter"
+# MainN: the mover "(Schedule)" link must not open array 1's Scheduler (stock 7.3.4 ArrayOperation.page line)
+cat > $T/dx/ArrayOperation.page <<'S'
+Menu="Main:5"
+---
+    $('#mover-text').html("<b>_(Move)_</b> _(will immediately invoke the Mover)_.&nbsp;<a href=\"/Main/Settings/Scheduler\"<?if($tabbed):?> onclick=\"$.cookie('one','tab2')\"<?endif;?>>(_(Schedule)_)</a>");
+S
+MA_TEST_DX=$T/dx MA_TEST_PL=$T/pl MA_TEST_ROOT=$T/gp php $P/scripts/gen-pages 2 >/dev/null 2>$T/gp.err
+! grep -q 'Settings/Scheduler' $T/pl/Main2Operation.page && grep -q "multiarray mover-schedule 2 '0 3 \* \* \*'" $T/pl/Main2Operation.page && ! grep -q 'mover Schedule' $T/gp.err && ok "Main2's mover Schedule link explains array 2's own schedule instead of opening array 1's" || bad "Main2 mover Schedule link: $(grep -c Settings/Scheduler $T/pl/Main2Operation.page) left"
+# mover schedule collection: dispatcher knows mover/mover-schedule/mover-cron; update.php refreshes the cron after changeMover
+grep -q 'multiarray mover-cron' $HERE/src/usr/local/emhttp/plugins/multiarray/include/update.php && grep -q '^  mover)   mover_one' $P/scripts/multiarray && ok "extra arrays' mover schedules are collected into the host cron" || bad "mover schedule wiring"
 [ $f -eq 0 ] && echo "guards tests: all $n passed" || { echo "guards tests: $f failed"; exit 1; }

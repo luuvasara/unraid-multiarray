@@ -5,7 +5,7 @@
 case "$1" in
   export) shift; exec /usr/local/emhttp/plugins/multiarray/scripts/xport export "$@" ;;   # read-only, works with extra arrays disabled
   import) shift; exec /usr/local/emhttp/plugins/multiarray/scripts/xport "$@" ;;
-  hotplug|dmview|refresh|start|restart|setup|gen-pages|hostfilter)
+  hotplug|dmview|refresh|start|restart|setup|gen-pages|hostfilter|mover|mover-schedule|mover-cron)
     [ "$1 ${2:-}" = "hostfilter off" ] || grep -qs '^SERVICE="enable"' /boot/config/plugins/multiarray/multiarray.cfg || exit 0 ;;
 esac
 . /usr/local/emhttp/plugins/multiarray/scripts/lib.sh
@@ -132,6 +132,7 @@ refresh() {        # all running instances; serialized, re-reads the flash confi
   [ -r $CFG ] && . <(tr -d '\r' < $CFG)
   local N; for N in $(seq 2 $ARRAYS); do refresh_one $N; done
   hostfilter sync >/dev/null 2>&1
+  mover_cron
 }
 
 prepare() {      # volatile per-start files in RAM
@@ -303,6 +304,37 @@ stop_host() {
   return $rc
 }
 
+# ---- mover schedule of extra arrays ----
+# An instance's emhttpd writes its schedule to arrayN/plugins/dynamix/mover.cron, but the host's update_cron reads only
+# /boot/config/plugins/*/*.cron (and is a no-op inside instances). Collect every extra array's schedule into the
+# plugin's own multiarray.cron, as a line that runs that array's mover inside that array's namespace.
+mover_cron() {
+  local N f s out="" new=$FLASH/multiarray.cron
+  if [ "$SERVICE" = enable ]; then for N in $(seq 2 $ARRAYS); do f=$FLASH/array$N/plugins/dynamix/mover.cron
+    s=$(grep -v '^[[:space:]]*#' $f 2>/dev/null | awk 'NF>=6 && /mover/{print $1,$2,$3,$4,$5; exit}')
+    [ -n "$s" ] && out+="# array $N's mover (its own schedule, set on its Main$N tab or with: multiarray mover-schedule $N)"$'\n'"$s $PLUG/scripts/multiarray mover $N |& logger -t move"$'\n'
+  done; fi
+  if [ -z "$out" ]; then [ -e $new ] || return 0; rm -f $new
+  else [ "$(cat $new 2>/dev/null)"$'\n' = "$out" ] && return 0; printf '%s' "$out" > $new; fi
+  /usr/local/sbin/update_cron; log "mover schedules of extra arrays: $(grep -c 'multiarray mover [0-9]' $new 2>/dev/null || echo 0) installed"
+}
+mover_one() {    # cron: run array N's mover inside its namespace (its /mnt, shares and pools); skipped when not started
+  local p; p=$(em_pid $1)
+  [ -n "$p" ] && [ "$(inst_var $1 mdState)" = STARTED ] || { log "a$1: scheduled mover skipped: array $1 is not started"; return 0; }
+  nsenter -t $p -m -u -- /usr/local/sbin/mover start
+}
+# multiarray mover-schedule N ['M H DoM Mon DoW'|off]: show or set array N's mover schedule through its own emhttpd
+mover_schedule() {
+  local N=$1 c=$2 lg
+  [ -n "$N" ] && inst_running $N || { echo "array $N is not running" >&2; return 1; }
+  if [ -z "$c" ]; then echo "array $N mover schedule: $(inst_var $N shareMoverSchedule)"; return 0; fi
+  [ "$c" = off ] && c=""
+  [ -z "$c" ] || [[ $c =~ ^[0-9*/,-]+( [0-9*/,-]+){4}$ ]] || { echo "not a cron schedule: '$c' (five fields, e.g. '0 3 * * *' = every day at 03:00)" >&2; return 1; }
+  lg=$(inst_var $N shareMoverLogging)
+  em_cmd $N "shareMoverSchedule=$c&shareMoverLogging=${lg:-no}&changeMover=Apply" >/dev/null || return 1
+  sleep 1; mover_cron; echo "array $N mover schedule: $(inst_var $N shareMoverSchedule)"
+}
+
 targets() { case "$1" in ""|all) seq 2 $ARRAYS ;; *) echo "$1" ;; esac; }
 
 # what enabling does (also what a boot or an install does when enabled): drivers, generated tabs, host filter, start
@@ -349,6 +381,7 @@ teardown() {
   hostfilter off
   for N in 2 3 4 5 6 7 8 9; do rm -f $PLUG/Main${N}Devices.page $PLUG/Main${N}Operation.page $PLUG/nchan/device_list$N $PLUG/nchan/parity_list$N; done
   rm -f /var/run/multiarray/enabled
+  mover_cron   # SERVICE is no longer enable here: drops the extra arrays' mover lines
   log "disabled: extra arrays stopped, generated tabs removed"
   true
 }
@@ -371,7 +404,7 @@ status_json() {
 case "$1" in start|stop) exec 9>$RUNROOT/lock
   if [ "$1 ${3:-}" = "stop --host" ]; then flock -w 60 9 || log "host stop: lock busy for 60s, stopping anyway"; else flock 9; fi ;; esac
 case "$1" in
-  start)   for N in $(targets $2); do start_one $N; done; hostfilter sync ;;
+  start)   for N in $(targets $2); do start_one $N; done; hostfilter sync; mover_cron ;;
   stop)    [ "${3:-}" = --host ] && { stop_host; exit $?; }
            rc=0; for N in $(targets $2 | sort -rn); do stop_one $N || rc=1; done; exit $rc ;;
   restart) $0 stop $2; $0 start $2 ;;
@@ -386,5 +419,8 @@ case "$1" in
   gen-pages) shift; exec $PLUG/scripts/gen-pages "$@" ;;
   em)      shift; em_cmd "$@" ;;
   guard)   shift; guard "$@" ;;
-  *) echo "usage: $0 start|stop|restart [N|all] | refresh | setup | apply | status | status-json | em N cmd | export N | import plan|apply|start|check ..." >&2; exit 2 ;;
+  mover)   mover_one "$2" ;;
+  mover-schedule) mover_schedule "$2" "$3" ;;
+  mover-cron) mover_cron ;;
+  *) echo "usage: $0 start|stop|restart [N|all] | refresh | setup | apply | status | status-json | em N cmd | mover-schedule N ['M H DoM Mon DoW'|off] | export N | import plan|apply|start|check ..." >&2; exit 2 ;;
 esac

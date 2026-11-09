@@ -13,7 +13,8 @@
  */
 
 const MA_X_FORMAT = 'multiarray-array-export';
-const MA_X_FORMAT_VERSION = 1;
+const MA_X_FORMAT_VERSION = 2;   /* 2 (2026.11.09l): zfs pool name per slot, pools, shares. Version 1 files still import. */
+const MA_X_FORMAT_READS = [1, 2];
 /* disk.cfg keys that belong to the array; nothing else is exported */
 const MA_X_SETTING_KEYS = '/^(md_[a-z_]+|spindownDelay|spinupGroups|defaultFsType|startArray|shutdownTimeout|poll_attributes|warning|critical|hot|max)$/';
 /* names a hypervisor gives its emulated disks */
@@ -38,6 +39,7 @@ function ma_x_ctx($over = []) {
     'hostname'  => gethostname(),
     'now'       => time(),
     'blkid'     => 'ma_x_blkid',            // callable(devnode) => ['TYPE'=>..,'UUID'=>..] (read-only probe)
+    'zpools'    => 'ma_x_zpools',           // callable() => names of the imported zfs pools
     'allow_virtual' => ma_x_test_allow_virtual(),
   ];
 }
@@ -53,6 +55,8 @@ function ma_x_ini($file, $sections = false) { return is_file($file) ? ((array)@p
 function ma_x_read($file) { $s = @file_get_contents($file); return $s === false ? null : trim($s); }
 function ma_x_role($idx) { return $idx == 0 ? 'parity' : ($idx == 29 ? 'parity2' : "disk$idx"); }
 function ma_x_serial($id) { $p = strrpos((string)$id, '_'); return $p === false ? (string)$id : substr($id, $p + 1); }
+/* one name per file system: blkid says zfs_member, Unraid's settings say zfs */
+function ma_x_fsname($t) { $t = (string)$t; return $t === 'zfs_member' ? 'zfs' : ($t === '' ? null : $t); }
 
 function ma_x_blkid($node) {
   if (!is_string($node) || !preg_match('#^/dev/[A-Za-z0-9/_.-]+$#', $node)) return [];
@@ -180,9 +184,15 @@ function ma_x_export($n, $ctx = null, $pluginVersion = '') {
     if ($i != 0 && $i != 29) {
       $node = ma_x_fsnode($ctx, $info, $p, $i);
       $b = $node ? (array)call_user_func($ctx['blkid'], $node) : [];
-      if (($b['TYPE'] ?? '') === 'crypto_LUKS') { $luks = ['encrypted' => true, 'uuid' => $b['UUID'] ?? null]; $fs['type'] = preg_replace('/^luks:/', '', $fsType) ?: null; }
-      else { $fs = ['type' => ($b['TYPE'] ?? null) ?: (preg_replace('/^luks:/', '', $fsType) ?: null), 'uuid' => $b['UUID'] ?? null];
+      $cfgFs = preg_replace('/^luks:/', '', $fsType) ?: null;
+      if (($b['TYPE'] ?? '') === 'crypto_LUKS') { $luks = ['encrypted' => true, 'uuid' => $b['UUID'] ?? null]; $fs['type'] = ma_x_fsname($cfgFs); }
+      elseif ($node && ($b['TYPE'] ?? '') === '') {   /* probed and empty: the setting alone does not make a file system */
+        if ($cfgFs) $warnings[] = "$role: no file system found on the disk, although its setting says $fsType (for example a disk that was wiped or never formatted). After an import it shows Unmountable and Format is offered: format it only if it holds nothing you need.";
+      } else { $fs = ['type' => ma_x_fsname(($b['TYPE'] ?? null) ?: $cfgFs), 'uuid' => $b['UUID'] ?? null];
              if (strncmp($fsType, 'luks:', 5) === 0) $luks['encrypted'] = true; }
+      /* zfs: the pool name is what an import must not clash with (names are server-wide). Unraid names an array zfs
+       * disk's pool after its slot (disk1); an encrypted one cannot be read without its key, so the slot name stands */
+      if ($fs['type'] === 'zfs') $fs['pool'] = ($b['LABEL'] ?? '') !== '' && !$luks['encrypted'] ? $b['LABEL'] : $role;
       if (!$node) $warnings[] = "$role: file system UUID not read (no device node to probe)";
       $fss = (string)($d['fsStatus'] ?? '');
       if ($state === 'STARTED' && $fss !== '' && $fss !== 'Mounted') $warnings[] = "$role: file system status is \"$fss\"";
@@ -215,6 +225,7 @@ function ma_x_export($n, $ctx = null, $pluginVersion = '') {
   foreach (ma_x_ini($p['cfg'].'/disk.cfg') as $k => $v) if (preg_match(MA_X_SETTING_KEYS, $k)) $settings[$k] = $v;
   ksort($settings);
   $ver = ma_x_ini($ctx['version']);
+  [$pools, $pw] = ma_x_export_pools($ctx, $p, $disks); $warnings = array_merge($warnings, $pw);
   $data = [
     'format' => MA_X_FORMAT, 'format_version' => MA_X_FORMAT_VERSION,
     'exported' => gmdate('Y-m-d\TH:i:s\Z', $ctx['now']),
@@ -225,10 +236,48 @@ function ma_x_export($n, $ctx = null, $pluginVersion = '') {
     'encrypted' => (bool)array_filter($slots, fn($s) => $s['luks']['encrypted']),
     'settings' => $settings,
     'slots' => $slots,
+    'pools' => $pools,
+    'shares' => ma_x_export_shares($p['cfg']),
     'warnings' => $warnings,
   ];
   if ($virtual) { $data['test_virtual_allowed'] = true; $data['warnings'][] = 'TEST HOOK: virtual disks allowed: '.implode(' | ', $virtual); }
   return ['ok' => true, 'data' => $data, 'warnings' => $data['warnings']];
+}
+
+/* the array's pools as its own emhttpd has them (disks.ini type Cache; members of pool "cache" are cache, cache2, ...)
+ * plus the pool's settings file (pools/<name>.cfg). Recorded so an import can say what to recreate; never assigned
+ * automatically. Returns [pools, warnings]. */
+function ma_x_export_pools($ctx, $p, $disks) {
+  $pools = []; $w = [];
+  foreach ($disks as $k => $d) {
+    if (($d['type'] ?? '') !== 'Cache') continue;
+    $name = preg_replace('/\d+$/', '', (string)$k);   // Unraid's prefix(): pool names cannot end in a digit
+    if (!isset($pools[$name])) {
+      $cfg = ma_x_ini($p['cfg']."/pools/$name.cfg");
+      $pools[$name] = ['name' => $name, 'fs' => ma_x_fsname(preg_replace('/^luks:/', '', (string)($d['fsType'] ?? ''))),
+                       'encrypted' => strncmp((string)($d['fsType'] ?? ''), 'luks:', 5) === 0, 'profile' => (string)($d['fsProfile'] ?? ''),
+                       'slots' => (int)($cfg['diskSlots'] ?? $d['slots'] ?? 0), 'zfs_pool' => null, 'settings' => $cfg, 'devices' => []];
+    }
+    $id = (string)($d['id'] ?? ''); $dev = (string)($d['device'] ?? '');
+    if ($id === '') continue;   // an empty member slot
+    $info = $dev !== '' ? ma_x_devinfo($ctx, $dev) : null;
+    $b = []; if ($info && $info['partition'] && file_exists($ctx['dev'].'/'.$info['partition']['name'])) $b = (array)call_user_func($ctx['blkid'], $ctx['dev'].'/'.$info['partition']['name']);
+    if (ma_x_fsname($b['TYPE'] ?? '') === 'zfs' && ($b['LABEL'] ?? '') !== '') $pools[$name]['zfs_pool'] = $b['LABEL'];
+    $pools[$name]['devices'][] = ['member' => (string)$k, 'id' => $id, 'serial' => ma_x_serial($id), 'size_kb' => (int)($d['size'] ?? 0),
+      'sectors' => $info['sectors'] ?? null, 'model' => $info['model'] ?? '', 'by_id' => $info['by_id'] ?? [],
+      'fs' => ['type' => ma_x_fsname($b['TYPE'] ?? ''), 'uuid' => $b['UUID'] ?? null]];
+    if (!$info) $w[] = "pool $name: member $k ($id) is not present; the export lists it from the configuration only";
+  }
+  foreach ($pools as &$pl) if ($pl['fs'] === 'zfs' && $pl['zfs_pool'] === null) $pl['zfs_pool'] = $pl['name'];   // encrypted or not readable: Unraid names it after the pool
+  unset($pl);
+  return [array_values($pools), $w];
+}
+/* the array's share settings files (shares/<name>.cfg): which pool a share uses, mover direction, export settings.
+ * For an extra array these are its own shares (its own emhttpd, its own flash folder arrayN/shares). */
+function ma_x_export_shares($cfgdir) {
+  $out = [];
+  foreach ((array)@glob("$cfgdir/shares/*.cfg") as $f) $out[] = ['name' => basename($f, '.cfg'), 'settings' => ma_x_ini($f)];
+  return $out;
 }
 
 function ma_x_filename($data) {
@@ -243,7 +292,7 @@ function ma_x_validate($data, $ctx) {
   $e = [];
   if (!is_array($data)) return ['the file is not JSON from a Multi Arrays export'];
   if (($data['format'] ?? '') !== MA_X_FORMAT) $e[] = 'the file is not a Multi Arrays array export';
-  if ((int)($data['format_version'] ?? 0) !== MA_X_FORMAT_VERSION) $e[] = 'the export format version is '.($data['format_version'] ?? 'missing').', this plugin reads version '.MA_X_FORMAT_VERSION;
+  if (!in_array((int)($data['format_version'] ?? 0), MA_X_FORMAT_READS, true)) $e[] = 'the export format version is '.($data['format_version'] ?? 'missing').', this plugin reads versions '.implode(' and ', MA_X_FORMAT_READS).' (a newer file needs a newer plugin)';
   if (!empty($data['test_virtual_allowed']) && !$ctx['allow_virtual']) $e[] = 'the file was made with the virtual-disk test hook on; it is for testing only';
   $slots = $data['slots'] ?? null;
   if (!is_array($slots) || !$slots) { $e[] = 'the file lists no slots'; return $e; }
@@ -363,8 +412,84 @@ function ma_x_plan($data, $target, $ctx = null) {
     $rows[] = $row;
   }
   $maxData = 0; foreach ($slots as $s) if ($s['slot'] >= 1 && $s['slot'] <= 28) $maxData = max($maxData, $s['slot']);
+  $problems = array_merge($problems, ma_x_zfs_clashes($data, (int)$target, $ctx));
+  [$pools, $notes] = ma_x_plan_pools($data, (int)$target, $cand, $taken);
+  $notes = array_merge($notes, ma_x_plan_shares($data, (int)$target, $ctx));
   return ['ok' => !$problems, 'rows' => $rows, 'problems' => $problems, 'target' => (int)$target, 'max_data_slot' => $maxData,
-          'encrypted' => !empty($data['encrypted']), 'settings' => $data['settings'] ?? [], 'warnings' => $data['warnings'] ?? []];
+          'encrypted' => !empty($data['encrypted']), 'settings' => $data['settings'] ?? [], 'warnings' => $data['warnings'] ?? [],
+          'pools' => $pools, 'notes' => $notes];
+}
+
+/* zfs pool names the export asks for (array zfs disks: named after the slot; pools: their own name) */
+function ma_x_wanted_zfs($data) {
+  $w = [];
+  foreach ($data['slots'] ?? [] as $s) { $t = ma_x_fsname($s['fs']['type'] ?? ''); if ($t === 'zfs') $w[$s['fs']['pool'] ?? $s['role']] = $s['role']; }   // version 1: no pool recorded, the slot name is Unraid's
+  foreach ($data['pools'] ?? [] as $pl) if (($pl['fs'] ?? '') === 'zfs') $w[$pl['zfs_pool'] ?? $pl['name']] = 'pool '.$pl['name'];
+  return $w;
+}
+/* zfs pool names are server-wide: a name already imported, or one another array (or array 1) is set up to use, can't
+ * be used by the imported array too. Found here, in the plan, before anything is assigned (else only Start refuses). */
+function ma_x_zfs_clashes($data, $target, $ctx) {
+  $want = ma_x_wanted_zfs($data); if (!$want) return [];
+  $imported = array_filter(array_map('trim', (array)call_user_func($ctx['zpools'] ?? 'ma_x_zpools')));
+  $users = [];   // pool name => which array's configuration uses it
+  for ($n = 1; $n <= 9; $n++) {
+    if ($n == $target) continue;
+    $st = $n == 1 ? $ctx['emhttp'] : $ctx['runroot']."/a$n/state";
+    foreach (ma_x_ini("$st/disks.ini", true) as $k => $d) {
+      if (strpos((string)($d['fsType'] ?? ''), 'zfs') === false || ($d['id'] ?? '') === '') continue;
+      $name = ($d['type'] ?? '') === 'Cache' ? preg_replace('/\d+$/', '', (string)$k) : (string)$k;
+      $users[$name] = $users[$name] ?? ($n == 1 ? 'array 1 (the main array) or its pools' : "array $n");
+    }
+  }
+  $e = [];
+  foreach ($want as $name => $what) {
+    $who = isset($users[$name]) ? $users[$name] : (in_array($name, $imported, true) ? 'a pool that is imported on this server now' : null);
+    if ($who === null) continue;
+    $fix = strpos($what, 'pool ') === 0
+      ? "rename one of the two pools first, for example on the source server (stop its array, click the pool name on the Main tab, change it) and export again, or rename the pool here"
+      : "an array zfs disk always gets its slot's name, so this one can't be renamed. If the other is a pool you made yourself, rename it (example: zpool export $name; zpool import $name {$name}_old). If it is another array's zfs $name, the two can't run at the same time: keep that array stopped while this one runs, or move that disk's files off and reformat one of the two with xfs or btrfs";
+    $e[] = "$what: its zfs pool name \"$name\" is already used by $who. zfs pool names are server-wide, so starting this array would be refused (or fail to import). To fix: $fix. Check with: zpool list -H -o name";
+  }
+  return $e;
+}
+function ma_x_zpools() { $o = []; @exec('/usr/sbin/zpool list -H -o name 2>/dev/null', $o); return $o; }
+/* pools in the export: which disks here carry their members (same serial + size, free). Nothing is assigned: the plan
+ * says how to add the pool on the target's Main tab; the found disks are pinned with the array so array 1 does not offer them. */
+function ma_x_plan_pools($data, $target, $cand, $taken) {
+  $out = []; $notes = [];
+  foreach ($data['pools'] ?? [] as $pl) {
+    $found = []; $missing = [];
+    foreach ($pl['devices'] ?? [] as $m) {
+      $hit = null;
+      foreach ($cand as $dev => $c) if (!isset($taken[$dev]) && !$c['not_free'] && $c['id'] !== '' && ma_x_serial($c['id']) === $m['serial'] && (!$m['sectors'] || $c['sectors'] == $m['sectors'])) { $hit = $c; break; }
+      if ($hit) { $found[] = ['member' => $m['member'], 'device' => $hit['device'], 'id' => $hit['id'], 'by_id' => $hit['by_id']]; $taken[$hit['device']] = 1; }
+      else $missing[] = "{$m['member']} (serial {$m['serial']})";
+    }
+    $out[] = ['name' => $pl['name'], 'fs' => $pl['fs'] ?? null, 'profile' => $pl['profile'] ?? '', 'found' => $found, 'missing' => $missing];
+    $what = trim(($pl['fs'] ?? '').' '.($pl['profile'] ?? ''));
+    $how = $target == 1 ? 'Main' : "Main$target";
+    $n = "pool {$pl['name']}".($what !== '' ? " ($what)" : '').': not created by the import. After it, on the '.$how.' tab: Add Pool, name '.$pl['name'].', '.max(count($pl['devices'] ?? []), 1).' slot(s), assign '
+       .($found ? implode(', ', array_map(fn($f) => "{$f['id']} ({$f['device']}) as {$f['member']}", $found)) : 'its disks')
+       .', then start: Unraid reads the existing file system, so do not format it (Format would erase the pool).';
+    if ($missing) $n .= ' Not connected or not free here: '.implode(', ', $missing).'; without them the pool starts degraded or not at all.';
+    if ($found && $target >= 2) $n .= " Its found disks are pinned to array $target with the slots, so array 1 does not offer them.";
+    $notes[] = $n;
+  }
+  return [$out, $notes];
+}
+/* shares in the export (their settings files). For an extra array target they are written into its own flash folder
+ * (arrayN/shares), only where no share of that name exists; for array 1 they are listed for doing by hand. */
+function ma_x_plan_shares($data, $target, $ctx) {
+  $sh = $data['shares'] ?? []; if (!$sh) return [];
+  $names = array_map(fn($s) => (string)($s['name'] ?? ''), $sh);
+  if ($target == 1) return ['shares '.implode(', ', $names).': their settings are in the export file ("shares"). They are not written into array 1, where shares of the same name may exist; set them on the Shares tab (for example which pool a share uses and its mover direction).'];
+  $dir = $ctx['plugcfg']."/array$target/shares"; $new = []; $kept = [];
+  foreach ($names as $n) if (is_file("$dir/$n.cfg")) $kept[] = $n; else $new[] = $n;
+  $t = [];
+  if ($new) $t[] = 'shares '.implode(', ', $new).": their settings (pool, mover direction, export) are written into array $target's config with the assignments; the folders themselves are on the disks.";
+  if ($kept) $t[] = 'shares '.implode(', ', $kept).": array $target already has settings for them; those are kept. Compare them with the export file if they should match.";
+  return $t;
 }
 
 /* ---------------- apply (the only part that changes anything; always after an explicit confirm) ---------------- */
@@ -373,6 +498,7 @@ function ma_x_plan($data, $target, $ctx = null) {
 function ma_x_plan_hash($plan) {
   $k = [$plan['target']];
   foreach ($plan['rows'] as $r) $k[] = $r['slot'].'='.($r['disk']['device'] ?? '').'|'.($r['disk']['id'] ?? '').'|'.($r['want']['serial'] ?? '');
+  foreach ($plan['pools'] ?? [] as $pl) foreach ($pl['found'] as $f) $k[] = "pool {$pl['name']} {$f['member']}={$f['device']}|{$f['id']}";
   return substr(hash('sha256', implode("\n", $k)), 0, 16);
 }
 
@@ -390,6 +516,20 @@ function ma_x_emcmd($target, $body) {
   exec('/usr/local/emhttp/plugins/multiarray/scripts/multiarray guard '.(int)$target.' '.escapeshellarg($body).' 2>&1', $why, $rc);   // same guard as the GUI forwarder
   if ($rc !== 0) { error_log('multiarray import: '.implode(' ', $why)); return 409; }
   return ma_cmd($target, $body)[0];
+}
+
+/* share settings files of the export into an extra array's shares/ folder; an existing file is never replaced */
+function ma_x_write_shares($data, $dir) {
+  $log = [];
+  foreach ($data['shares'] ?? [] as $sh) {
+    $n = (string)($sh['name'] ?? '');
+    if (!preg_match('/^[A-Za-z0-9][A-Za-z0-9 ._-]*$/', $n) || !is_array($sh['settings'] ?? null)) { $log[] = "share \"$n\": not written (unusual name or no settings)"; continue; }
+    if (is_file("$dir/$n.cfg")) { $log[] = "share $n: settings kept (it exists already)"; continue; }
+    $t = ''; foreach ($sh['settings'] as $k => $v) if (preg_match('/^[A-Za-z0-9_.]+$/', (string)$k) && is_scalar($v)) $t .= $k.'="'.str_replace(['"', "\n", "\r"], '', (string)$v)."\"\n";
+    @mkdir($dir, 0755, true);
+    $log[] = file_put_contents("$dir/$n.cfg", $t) !== false ? "share $n: settings written" : "share $n: could not write its settings";
+  }
+  return $log;
 }
 
 function ma_x_wait($fn, $secs) { for ($i = 0; $i < $secs * 2; $i++) { if ($fn()) return true; usleep(500000); } return (bool)$fn(); }
@@ -421,6 +561,7 @@ function ma_x_apply($data, $target, $hash, $ctx = null) {
   if ($target >= 2) {   // 1. pin the disks to the target: hidden from the main array and every other array from now on
     $names = [];
     foreach ($plan['rows'] as $r) { $b = ma_x_pick_byid($r['disk']['by_id']); if (!$b) return ['ok' => false, 'log' => $log, 'error' => "{$r['role']}: the disk has no /dev/disk/by-id name to pin"]; $names[] = $b; }
+    foreach ($plan['pools'] ?? [] as $pl) foreach ($pl['found'] as $f) { $b = ma_x_pick_byid($f['by_id']); if ($b) $names[] = $b; }
     if (!ma_x_set_pins($ctx, $target, $names)) return ['ok' => false, 'log' => $log, 'error' => 'could not write multiarray.cfg'];
     $log[] = "pinned to array $target: ".implode(' ', $names);
     exec('/usr/local/emhttp/plugins/multiarray/scripts/multiarray refresh 2>&1', $o, $rc);
@@ -444,6 +585,7 @@ function ma_x_apply($data, $target, $hash, $ctx = null) {
     $log[] = "{$r['role']} <- {$r['disk']['id']} ({$r['disk']['device']}): ".($ok ? 'assigned' : 'NOT assigned')." (HTTP $st)";
     if (!$ok) return ['ok' => false, 'log' => $log, 'error' => "{$r['role']} was not assigned; stopped here. The slots assigned so far can be unassigned on the Main$target tab."];
   }
+  if ($target >= 2) $log = array_merge($log, ma_x_write_shares($data, $ctx['plugcfg']."/array$target/shares"));
   $var = ma_x_ini($tp['state'].'/var.ini');
   $log[] = "array $target state: ".($var['mdState'] ?? '?');
   return ['ok' => true, 'log' => $log, 'mdState' => $var['mdState'] ?? '', 'error' => null];

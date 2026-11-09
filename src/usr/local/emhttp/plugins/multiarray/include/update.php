@@ -10,6 +10,8 @@ $pairs = array_filter(explode('&', file_get_contents('php://input')), fn($p) => 
 exec('/usr/local/emhttp/plugins/multiarray/scripts/multiarray guard '.$n.' '.escapeshellarg(implode('&', $pairs)).' 2>&1', $why, $rc);
 if ($rc !== 0) { http_response_code(409); header('Content-Type: text/plain; charset=utf-8'); echo implode("\n", $why); exit; }
 [$st, $body] = ma_send($n, implode('&', array_merge($pairs, ['csrf_token='.rawurlencode(ma_token($n))])));
+/* a mover schedule set on this array: the host's cron runs it (update_cron does not look into arrayN/) */
+if (preg_grep('/^changeMover=/', $pairs)) exec('/usr/local/emhttp/plugins/multiarray/scripts/multiarray mover-cron >/dev/null 2>&1');
 http_response_code($st ?: 502);
 header('Content-Type: text/html; charset=utf-8');
 echo $body;

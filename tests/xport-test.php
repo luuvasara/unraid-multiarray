@@ -45,7 +45,7 @@ function ctx($R, $over = []) {
   return ma_x_ctx($over + ['sys' => "$R/sys", 'byid' => "$R/byid", 'dev' => "$R/dev", 'emhttp' => "$R/emhttp", 'boot' => "$R/boot",
     'plugcfg' => "$R/plugcfg", 'runroot' => "$R/run", 'proc' => "$R/proc", 'mounts' => "$R/mounts", 'swaps' => "$R/swaps",
     'version' => "$R/unraid-version", 'hostname' => 'Tower', 'now' => 1793900000, 'allow_virtual' => false,
-    'blkid' => function($node) { return ['TYPE' => 'xfs', 'UUID' => 'uuid-'.basename($node)]; }]);
+    'zpools' => fn() => [], 'blkid' => function($node) { return ['TYPE' => 'xfs', 'UUID' => 'uuid-'.basename($node)]; }]);
 }
 /* array 1 on the fake server: slots [idx => [dev, id]] */
 function array1($R, $slots, $var = [], $mdx = [], $diskx = []) {
@@ -58,7 +58,7 @@ function array1($R, $slots, $var = [], $mdx = [], $diskx = []) {
     $md .= "diskSize.$i=$size\nrdevSize.$i=$size\nrdevOffset.$i=".($dev ? 64 : 0)."\nrdevId.$i=$id\n";
     $role = ma_x_role($i);
     if ($i <= 4 || $i == 29) $disks[$role] = ['idx' => $i, 'name' => $role, 'device' => $dev, 'id' => $id, 'idSb' => $id, 'type' => ($i == 0 || $i == 29) ? 'Parity' : 'Data',
-      'status' => $dev ? 'DISK_OK' : 'DISK_NP'] + ($i && $i != 29 && $dev ? ['fsType' => 'xfs', 'fsStatus' => 'Mounted'] : []) + ($diskx[$role] ?? []);
+      'status' => $dev ? 'DISK_OK' : 'DISK_NP'] + ($diskx[$role] ?? []) + ($i && $i != 29 && $dev ? ['fsType' => 'xfs', 'fsStatus' => 'Mounted'] : []);
   }
   $disks['flash'] = ['idx' => 30, 'name' => 'flash', 'device' => 'sdz', 'id' => 'Flash_X', 'type' => 'Flash'];
   put("$R/proc/mdstat", $md);
@@ -78,7 +78,7 @@ $R = world($real); array1($R, [0 => ['sda', 'WDC_WD40EFRX_WD-AAA1'], 1 => ['sdb'
 $r = ma_x_export(1, ctx($R), '2026.11.08c');
 check($r['ok'], 'clean array on real disks exports');
 $d = $r['data'] ?? [];
-check(($d['format'] ?? '') === MA_X_FORMAT && $d['format_version'] === 1 && $d['array'] === 1 && $d['server'] === 'Tower', 'JSON head: format, version, array, server');
+check(($d['format'] ?? '') === MA_X_FORMAT && $d['format_version'] === 2 && $d['array'] === 1 && $d['server'] === 'Tower', 'JSON head: format, version, array, server');
 check(count($d['slots'] ?? []) === 3 && array_column($d['slots'], 'role') === ['parity', 'disk1', 'disk2'], 'three slots in slot order; empty parity2 left out');
 $s1 = $d['slots'][1] ?? [];
 check($s1['serial'] === 'WD-BBB2' && $s1['id'] === 'WDC_WD40EFRX_WD-BBB2' && $s1['slot'] === 1, 'serial = text after the last _ of the id, as md compares');
@@ -214,12 +214,60 @@ $R = target($tgt);
 check(!ma_x_plan($exp, 5, ctx($R))['ok'], 'import refused: target instance not running');
 /* file validation */
 $e = $exp; $e['format'] = 'other'; check(preg_grep('/not a Multi Arrays/', ma_x_validate($e, ctx($R))), 'validate: wrong format');
-$e = $exp; $e['format_version'] = 2; check(preg_grep('/format version/', ma_x_validate($e, ctx($R))), 'validate: newer format version');
+$e = $exp; $e['format_version'] = 3; check(preg_grep('/format version/', ma_x_validate($e, ctx($R))), 'validate: newer format version');
 $e = $exp; $e['slots'][1]['role'] = 'parity'; check(preg_grep('/expected disk1/', ma_x_validate($e, ctx($R))), 'validate: a data disk is never parity');
 $e = $exp; $e['slots'][1]['serial'] = 'X'; check(preg_grep('/serial and id do not agree/', ma_x_validate($e, ctx($R))), 'validate: serial must come from the id');
 $e = $exp; $e['slots'][] = $e['slots'][0]; check(preg_grep('/listed twice/', ma_x_validate($e, ctx($R))), 'validate: slot twice');
 check(ma_x_validate('x', ctx($R)) === ['the file is not JSON from a Multi Arrays export'], 'validate: not JSON');
 rmrf($R);
+
+/* ===== F12: zfs pool names, wiped slots, pools and shares in the export; zfs clash and pool notes in the plan ===== */
+$disksF = ['sda' => [$G, 'WDC WD40EFRX', 'ATA', 'WD-AAA1'], 'sdb' => [$G, 'WDC WD40EFRX', 'ATA', 'WD-BBB2'], 'sdc' => [$G, 'WDC WD40EFRX', 'ATA', 'WD-CCC3'],
+           'sdd' => [$G, 'Samsung SSD', 'ATA', 'S-PPP1'], 'sde' => [$G, 'Samsung SSD', 'ATA', 'S-PPP2']];
+$probe = ['sdb1' => ['TYPE' => 'zfs_member', 'LABEL' => 'disk1', 'UUID' => '111'], 'sdc1' => [], 'sdd1' => ['TYPE' => 'btrfs', 'UUID' => 'b-1'], 'sde1' => ['TYPE' => 'btrfs', 'UUID' => 'b-1']];
+$R = world($disksF);
+array1($R, [0 => ['sda', 'WDC_WD40EFRX_WD-AAA1'], 1 => ['sdb', 'WDC_WD40EFRX_WD-BBB2'], 2 => ['sdc', 'WDC_WD40EFRX_WD-CCC3']], [], [],
+  ['disk1' => ['fsType' => 'zfs'], 'disk2' => ['fsType' => 'zfs']]);
+$di = parse_ini_file("$R/emhttp/disks.ini", true);
+$di['cache'] = ['idx' => 31, 'name' => 'cache', 'device' => 'sdd', 'id' => 'Samsung_SSD_S-PPP1', 'type' => 'Cache', 'fsType' => 'btrfs', 'fsProfile' => 'raid1', 'size' => '16777184', 'slots' => '2'];
+$di['cache2'] = ['idx' => 32, 'name' => 'cache2', 'device' => 'sde', 'id' => 'Samsung_SSD_S-PPP2', 'type' => 'Cache', 'fsType' => 'btrfs', 'size' => '16777184'];
+put("$R/emhttp/disks.ini", ini($di, true));
+put("$R/boot/pools/cache.cfg", "diskSlots=\"2\"\ndiskFsType=\"btrfs\"\n");
+put("$R/boot/shares/media.cfg", "shareUseCache=\"yes\"\nshareCachePool=\"cache\"\n");
+$c = ctx($R, ['blkid' => function($node) use ($probe) { return $probe[basename($node)] ?? []; }]);
+$r = ma_x_export(1, $c); $d = $r['data'] ?? [];
+$sl = []; foreach ($d['slots'] ?? [] as $s) $sl[$s['role']] = $s;
+check(($sl['disk1']['fs'] ?? null) === ['type' => 'zfs', 'uuid' => '111', 'pool' => 'disk1'], 'export: zfs_member is written as zfs, with its pool name');
+check(($sl['disk2']['fs'] ?? null) === ['type' => null, 'uuid' => null] && preg_grep('/disk2: no file system found.*says zfs/', $r['warnings'] ?? []), 'export: a slot whose setting says zfs but holds no file system is exported without one, with a warning');
+$pl = $d['pools'][0] ?? [];
+check(count($d['pools'] ?? []) === 1 && $pl['name'] === 'cache' && $pl['fs'] === 'btrfs' && $pl['profile'] === 'raid1' && $pl['slots'] === 2
+  && array_column($pl['devices'], 'member') === ['cache', 'cache2'] && $pl['devices'][1]['serial'] === 'S-PPP2' && $pl['settings']['diskFsType'] === 'btrfs', 'export: the pool with its members, profile and settings file');
+check(($d['shares'] ?? null) === [['name' => 'media', 'settings' => ['shareUseCache' => 'yes', 'shareCachePool' => 'cache']]], 'export: share settings files');
+rmrf($R);
+$expF = $d;
+/* plan into array 2: pool disks found and noted, share noted; then a zfs name clash */
+$R = target(['sdk' => $disksF['sda'], 'sdl' => $disksF['sdb'], 'sdm' => $disksF['sdc'], 'sdn' => $disksF['sdd'], 'sdo' => $disksF['sde']]);
+$p = ma_x_plan($expF, 2, ctx($R));
+check($p['ok'] && ($p['pools'][0]['found'][1]['device'] ?? '') === 'sdo' && preg_grep('/pool cache \(btrfs raid1\): not created by the import.*Add Pool.*do not format/', $p['notes'])
+  && preg_grep('/shares media: .*written into array 2/', $p['notes']), 'plan: pool members found by serial, with the steps to add the pool; share noted');
+check(ma_x_plan_hash($p) !== ma_x_plan_hash(['target' => 2, 'rows' => $p['rows']]), 'confirm code covers the pool disks too');
+$p = ma_x_plan($expF, 2, ctx($R, ['zpools' => fn() => ['disk1']]));
+check(!$p['ok'] && preg_grep('/disk1: its zfs pool name "disk1" is already used by a pool that is imported.*slot\'s name.*zpool list/', $p['problems']), 'plan: a zfs pool name already imported is refused with the reason and what to do');
+$a3 = "$R/run/a3/state/disks.ini"; put($a3, ini(['disk1' => ['idx' => 1, 'type' => 'Data', 'id' => 'X_1', 'fsType' => 'luks:zfs']], true));
+$p = ma_x_plan($expF, 2, ctx($R));
+check(!$p['ok'] && preg_grep('/"disk1" is already used by array 3/', $p['problems']), 'plan: a zfs pool name another array is set up to use is refused (before Start would)');
+rmrf($R);
+/* version 1 files: still read; a zfs slot without a recorded pool name stands for its slot name */
+$v1 = $expF; $v1['format_version'] = 1; unset($v1['pools'], $v1['shares']); unset($v1['slots'][1]['fs']['pool']); $v1['slots'][1]['fs']['type'] = 'zfs_member';
+$R = target(['sdk' => $disksF['sda'], 'sdl' => $disksF['sdb'], 'sdm' => $disksF['sdc']]);
+check(!ma_x_validate($v1, ctx($R)) && ma_x_plan($v1, 2, ctx($R))['ok'], 'a version 1 export still imports');
+check(!ma_x_plan($v1, 2, ctx($R, ['zpools' => fn() => ['disk1']]))['ok'], 'version 1: a zfs slot (zfs_member) is checked under its slot name');
+rmrf($R);
+/* shares are written into an extra array's own folder, never over an existing file */
+$T = sys_get_temp_dir().'/ma-sh-'.getmypid(); put("$T/keep.cfg", "x=\"1\"\n");
+$l = ma_x_write_shares(['shares' => [['name' => 'media', 'settings' => ['shareUseCache' => 'yes']], ['name' => 'keep', 'settings' => ['x' => '2']], ['name' => '../evil', 'settings' => []]]], $T);
+check(file_get_contents("$T/media.cfg") === "shareUseCache=\"yes\"\n" && file_get_contents("$T/keep.cfg") === "x=\"1\"\n" && !file_exists(dirname($T).'/evil.cfg') && count($l) === 3, 'shares: new ones written, existing kept, odd names refused');
+rmrf($T);
 
 echo $fail ? "xport tests FAILED\n" : "xport tests: all $n passed\n";
 exit($fail);

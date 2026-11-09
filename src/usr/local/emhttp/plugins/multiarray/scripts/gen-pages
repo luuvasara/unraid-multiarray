@@ -64,6 +64,12 @@ foreach ($list as $cur) {
   sub($b, 'last_parity_log()', "ma_last_parity_log($N)", 'last_parity_log');
   sub($b, '#<form name="shutdownOps".*?</form>#s', '', 'host Reboot/Shutdown form (removed)', true);
   sub($b, '#<input type="button" value="_\(History\)_" onclick="parityHistory\(\)">#', '', 'History button (host log; removed)', true);
+  /* Move/Empty "(Schedule)" opens array 1's Scheduler; array N's mover has its own schedule (multiarray mover-schedule N) */
+  $sched = <<<'X'
+<a href=\"/Main/Settings/Scheduler\"<?if($tabbed):?> onclick=\"$.cookie('one','tab2')\"<?endif;?>>(_(Schedule)_)</a>
+X;
+  $hint = "Array $N moves on its own schedule; the Scheduler page sets array 1's. Set it in a terminal, for example: multiarray mover-schedule $N '0 3 * * *' (every day at 03:00), or off. Without one, files stay on the pool until you click Move.";
+  sub($b, $sched, "<span style=\\\"cursor:help;border-bottom:1px dotted\\\" title=\\\"$hint\\\">(_(Schedule)_)</span>", 'mover Schedule link (array 1 Scheduler; replaced by a hint)');
   $hdrs = "Menu=\"Main$N:5\"\nTitle=\"Array $N Operation\"\nTag=\"".hdr($ao[0], 'Tag')."\"\nNchan=\"device_list$N,parity_list$N\"\nCond=\"$cond\"\n---\n";
   file_put_contents("$PL/Main{$N}Operation.page", $hdrs.$enter.$b.$leave);
 
