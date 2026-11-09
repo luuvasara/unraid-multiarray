@@ -68,6 +68,9 @@ picked up automatically.
 
 - Config: `/boot/config/plugins/multiarray/multiarray.cfg`; array N's own settings: `/boot/config/plugins/multiarray/arrayN/`
 - CLI: `/usr/local/emhttp/plugins/multiarray/scripts/multiarray start|stop|status|refresh [N|all]`
+- Schedules: an extra array's mover and parity check run from the host's cron, set with
+  `multiarray mover-schedule N` and `multiarray check-schedule N ['M H DoM Mon DoW' [correct]|off]`
+  (ex. `multiarray check-schedule 2 '0 2 1 * *'` checks array 2 at 02:00 on the 1st of each month; extra arrays start without one)
 - Log: `/var/log/multiarray.log`
 
 ## Disks
@@ -118,8 +121,9 @@ Proof of concept (see the warning above), tested in a VM on Unraid 7.3.4 (all wi
 - install, upgrade and removal
 
 Not yet:
-- share export (SMB/NFS) and scheduled jobs for extra arrays
-- per-disk pages and parity history on MainN
+- share export (SMB/NFS) for extra arrays
+- Unraid's routine alerts (parity check finished, disk errors, temperatures) for extra arrays
+- per-disk pages on MainN
 - a driver build is needed per Unraid kernel version
 
 ## Development
