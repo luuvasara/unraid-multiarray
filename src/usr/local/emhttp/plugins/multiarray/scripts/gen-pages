@@ -70,6 +70,12 @@ foreach ($list as $cur) {
 X;
   $hint = "Array $N moves on its own schedule; the Scheduler page sets array 1's. Set it in a terminal, for example: multiarray mover-schedule $N '0 3 * * *' (every day at 03:00), or off. Without one, files stay on the pool until you click Move.";
   sub($b, $sched, "<span style=\\\"cursor:help;border-bottom:1px dotted\\\" title=\\\"$hint\\\">(_(Schedule)_)</span>", 'mover Schedule link (array 1 Scheduler; replaced by a hint)');
+  /* parity Check "(Schedule)" opens array 1's Scheduler too; array N's check has its own schedule (multiarray check-schedule N) */
+  $psched = <<<'X'
+<a href="/Main/Settings/Scheduler"<?if ($tabbed):?> onclick="$.cookie('one','tab1')"<?endif;?>>(_(Schedule)_)</a>
+X;
+  $phint = "Array $N checks parity on its own schedule; the Scheduler page sets array 1's. Set it in a terminal, for example: multiarray check-schedule $N '0 2 1 * *' (on the 1st of every month at 02:00, errors reported, parity not changed), or off. Without one, array $N is checked only when you click Check.";
+  sub($b, $psched, "<span style=\"cursor:help;border-bottom:1px dotted\" title=\"$phint\">(_(Schedule)_)</span>", 'parity check Schedule link (array 1 Scheduler; replaced by a hint)');
   $hdrs = "Menu=\"Main$N:5\"\nTitle=\"Array $N Operation\"\nTag=\"".hdr($ao[0], 'Tag')."\"\nNchan=\"device_list$N,parity_list$N\"\nCond=\"$cond\"\n---\n";
   file_put_contents("$PL/Main{$N}Operation.page", $hdrs.$enter.$b.$leave);
 

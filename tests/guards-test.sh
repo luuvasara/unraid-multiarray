@@ -46,7 +46,10 @@ printf '["parity"]\ntype="Parity"\nfsType=""\n["disk1"]\nfsType="zfs"\ntype="Dat
 got=$(bash -c ". $P/scripts/lib.sh 2>/dev/null; zfs_pool_names $T/disks.ini" | tr '\n' ' ')
 [ "$got" = "cache disk1 disk2 " ] && ok "zfs pool names of an array: slot names for array disks, the pool name for pool members" || bad "zfs_pool_names gave '$got'"
 # udev rule covers partitions; md_is_stopped unchanged
-! grep -q 'DEVTYPE' $HERE/src/etc/udev/rules.d/99-multiarray.rules && ok "udev rule refreshes on partitions too" || bad "udev rule matches whole disks only"
+U=$HERE/src/etc/udev/rules.d/99-multiarray.rules
+grep 'multiarray hotplug' $U | grep -qv 'DEVTYPE' && ok "udev rule refreshes on partitions too" || bad "udev rule matches whole disks only"
+# F16: a new partition must be in the views before emhttpd's lsblk (udevadm settle waits for RUN, so synchronous, no '&')
+grep 'DEVTYPE}=="partition"' $U | grep -q 'multiarray devview $env{ACTION} %k %M:%m"$' && grep -q 'ln -sfn "$(readlink /sys/dev/block/$mm)" $R/stage/devblock/$mm' $P/scripts/multiarray && ok "partitions enter the filtered views from udev at once (devview), not only after the delayed refresh" || bad "partition devview rule"
 # instance GUI on loopback only: apply prepare()'s rc.nginx edit to a stub with the stock shape
 printf '#!/bin/bash\nlisten(){\n  echo "listen $*;"\n}\n\n# create redirect server blocks\nPORT=8081 PORTSSL=9083\necho "$(listen lo)"; echo "$(listen $PORT default_server)"\n' > $T/rc.nginx
 cmd=$(grep -o "sed -i '/^# create redirect server blocks\$/i # multiarray: loopback only[^']*' " $P/scripts/multiarray)
@@ -74,9 +77,31 @@ cat > $T/dx/ArrayOperation.page <<'S'
 Menu="Main:5"
 ---
     $('#mover-text').html("<b>_(Move)_</b> _(will immediately invoke the Mover)_.&nbsp;<a href=\"/Main/Settings/Scheduler\"<?if($tabbed):?> onclick=\"$.cookie('one','tab2')\"<?endif;?>>(_(Schedule)_)</a>");
+          <tr><td>_(Parity is valid)_.</td><td><input type="submit" name="cmdCheck" value="_(Check)_"></td><td>**_(Check)_** _(will start **Parity-Check**)_.&nbsp;<a href="/Main/Settings/Scheduler"<?if ($tabbed):?> onclick="$.cookie('one','tab1')"<?endif;?>>(_(Schedule)_)</a>
 S
 MA_TEST_DX=$T/dx MA_TEST_PL=$T/pl MA_TEST_ROOT=$T/gp php $P/scripts/gen-pages 2 >/dev/null 2>$T/gp.err
 ! grep -q 'Settings/Scheduler' $T/pl/Main2Operation.page && grep -q "multiarray mover-schedule 2 '0 3 \* \* \*'" $T/pl/Main2Operation.page && ! grep -q 'mover Schedule' $T/gp.err && ok "Main2's mover Schedule link explains array 2's own schedule instead of opening array 1's" || bad "Main2 mover Schedule link: $(grep -c Settings/Scheduler $T/pl/Main2Operation.page) left"
+grep -q "multiarray check-schedule 2 '0 2 1 \* \*'" $T/pl/Main2Operation.page && ! grep -q 'parity check Schedule' $T/gp.err && ok "Main2's parity-check Schedule link explains array 2's own schedule instead of opening array 1's" || bad "Main2 parity Schedule link"
 # mover schedule collection: dispatcher knows mover/mover-schedule/mover-cron; update.php refreshes the cron after changeMover
 grep -q 'multiarray mover-cron' $HERE/src/usr/local/emhttp/plugins/multiarray/include/update.php && grep -q '^  mover)   mover_one' $P/scripts/multiarray && ok "extra arrays' mover schedules are collected into the host cron" || bad "mover schedule wiring"
+# parity-check schedule (stock Scheduler format, incl. a "first week" day test) -> one guarded line per extra array in multiarray.cron
+fn() { sed -n "/^$1() {/,/^}/p" $P/scripts/multiarray; }
+mkdir -p $T/fl/array4/plugins/dynamix $T/fl/array3/plugins/dynamix
+printf '# Generated parity check schedule:\n0 0 * * 1 [[ $(date +%%e) -le 7 ]] && /usr/local/sbin/mdcmd check CORRECT &> /dev/null || :\n' > $T/fl/array4/plugins/dynamix/parity-check.cron
+printf '# Generated mover schedule:\n40 3 * * * /usr/local/sbin/mover start > /dev/null 2> >(logger -t move)\n' > $T/fl/array3/plugins/dynamix/mover.cron
+bash -c "log() { :; }; FLASH=$T/fl PLUG=/P SERVICE=enable ARRAYS=4; $(fn mover_cron); mover_cron" >/dev/null 2>&1
+grep -qxF '0 0 * * 1 [[ $(date +%e) -le 7 ]] && /P/scripts/multiarray parity-check 4 CORRECT |& logger -t parity-check' $T/fl/multiarray.cron && grep -qxF '40 3 * * * /P/scripts/multiarray mover 3 |& logger -t move' $T/fl/multiarray.cron && ok "extra arrays' parity-check schedules are collected (day test and CORRECT kept) next to the mover's" || bad "parity-check cron: $(cat $T/fl/multiarray.cron 2>&1)"
+bash -c "log() { :; }; FLASH=$T/fl PLUG=/P SERVICE=enable ARRAYS=4; $(fn mover_cron); $(fn check_schedule); check_schedule 4 'every month'" >/dev/null 2>$T/err; [ $? = 1 ] && grep -q "e.g. '0 2 1 \* \*'" $T/err && ok "a bad parity-check schedule is refused with an example" || bad "check-schedule validation"
+bash -c "log() { :; }; FLASH=$T/fl PLUG=/P SERVICE=enable ARRAYS=4; $(fn mover_cron); $(fn check_schedule); check_schedule 4 off" >/dev/null 2>&1; ! grep -q 'parity-check 4' $T/fl/multiarray.cron && [ ! -e $T/fl/array4/plugins/dynamix/parity-check.cron ] && ok "check-schedule off removes the line" || bad "check-schedule off"
+# F17: a pool whose export fails stays on the instance's list, with the reason and the command; an exported one is forgotten
+mkdir -p $T/zb $T/run/a6; printf '#!/bin/bash\ncase "$1 ${@: -1}" in "list "*) printf "disk1\\ncache\\n" ;; "export disk1") echo "cannot export '"'"'disk1'"'"': pool is busy" >&2; exit 1 ;; esac; exit 0\n' > $T/zb/zpool; chmod +x $T/zb/zpool
+printf 'disk1\ncache\n' > $T/run/a6/zpools
+PATH=$T/zb:$PATH bash -c "log() { :; }; drv_disk_prefix() { echo mdf; }; RUNROOT=$T/run; $(fn export_own); export_own 6" 2>$T/err; rc=$?
+[ $rc = 1 ] && [ "$(cat $T/run/a6/zpools)" = disk1 ] && grep -q "pool is busy" $T/err && grep -q "zpool export disk1" $T/err && ok "a pool that did not export is kept and reported with the reason and the command; the exported one is forgotten" || bad "export_own: rc=$rc list=$(cat $T/run/a6/zpools 2>&1) err=$(cat $T/err)"
+# F17: a pool on the array's own md devices is exported even when the list was lost (09m forgot it after a failed export)
+printf '#!/bin/bash\necho "zpool $*" >> %s/zcalls\ncase $1 in list) printf "disk1\\nhpool\\n" ;; status) printf "  pool: hpool\\n\\thpool ONLINE\\n\\t  /dev/sdb1 ONLINE\\n  pool: disk1\\n\\tdisk1 ONLINE\\n\\t  /dev/mdf1p1  ONLINE 0 0 0\\n" ;; esac; exit 0\n' $T > $T/zb/zpool; rm -f $T/run/a6/zpools $T/zcalls
+PATH=$T/zb:$PATH bash -c "log() { :; }; drv_disk_prefix() { echo mdf; }; RUNROOT=$T/run; $(fn export_own); export_own 6" 2>$T/err
+grep -qx 'zpool export -f disk1' $T/zcalls && ! grep -q 'export -f hpool' $T/zcalls && ok "an unlisted pool on the array's own md devices is exported, another pool is not" || bad "export_own by device: $(tr '\n' ';' < $T/zcalls)"
+# F17: the stop path ends the namespace's processes even when emhttpd is gone; start refuses while leftovers run
+fn stop_one | grep -q '^  elif \[ -n "$(inst_pids $N)" \]; then' && fn stop_one | grep -q '^  for p in $(inst_pids $N); do kill $p' && fn start_one | grep -q 'ended without stopping the array' && ok "stop ends leftovers of a crashed emhttpd; start refuses while they run" || bad "stop/start leftovers"
 [ $f -eq 0 ] && echo "guards tests: all $n passed" || { echo "guards tests: $f failed"; exit 1; }

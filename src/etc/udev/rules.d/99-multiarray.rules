@@ -1,4 +1,6 @@
 # multiarray: a disk or a partition appeared or disappeared -> refresh the disk views of the running extra arrays (returns at once)
 SUBSYSTEM=="block", ACTION=="add|remove", KERNEL=="sd*|hd*|vd*|nvme*|mmcblk*", RUN+="/usr/local/emhttp/plugins/multiarray/scripts/multiarray hotplug"
-# a device-mapper device (an encrypted disk just opened): into the views at once, emhttpd looks it up right after opening it
-SUBSYSTEM=="block", ACTION=="add|remove", KERNEL=="dm-*", RUN+="/usr/local/emhttp/plugins/multiarray/scripts/multiarray dmview $env{ACTION} %k %M:%m"
+# a new partition (emhttpd partitions a new pool disk during Format, then runs udevadm settle + lsblk) or a device-mapper
+# device (an encrypted disk just opened): into the views at once, synchronously, so udevadm settle waits for it
+SUBSYSTEM=="block", ACTION=="add|remove", KERNEL=="sd*|hd*|vd*|nvme*|mmcblk*", ENV{DEVTYPE}=="partition", RUN+="/usr/local/emhttp/plugins/multiarray/scripts/multiarray devview $env{ACTION} %k %M:%m"
+SUBSYSTEM=="block", ACTION=="add|remove", KERNEL=="dm-*", RUN+="/usr/local/emhttp/plugins/multiarray/scripts/multiarray devview $env{ACTION} %k %M:%m"

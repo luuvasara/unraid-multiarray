@@ -5,7 +5,7 @@
 case "$1" in
   export) shift; exec /usr/local/emhttp/plugins/multiarray/scripts/xport export "$@" ;;   # read-only, works with extra arrays disabled
   import) shift; exec /usr/local/emhttp/plugins/multiarray/scripts/xport "$@" ;;
-  hotplug|dmview|refresh|start|restart|setup|gen-pages|hostfilter|mover|mover-schedule|mover-cron)
+  hotplug|devview|dmview|refresh|start|restart|setup|gen-pages|hostfilter|mover|mover-schedule|mover-cron|parity-check|check-schedule)
     [ "$1 ${2:-}" = "hostfilter off" ] || grep -qs '^SERVICE="enable"' /boot/config/plugins/multiarray/multiarray.cfg || exit 0 ;;
 esac
 . /usr/local/emhttp/plugins/multiarray/scripts/lib.sh
@@ -116,15 +116,26 @@ refresh_one() {
     for e in $show; do f=/dev/\${e%%:*}; m=\${e#*:}; [ -e \$f ] || mknod \$f b \$((0x\${m%%:*})) \$((0x\${m#*:})); done; true"
   visible_set > $R/visible
   # a new or removed partition (emhttpd partitions a new disk at its first start) changes the view, not the disk set
+  [ -e $R/rescan ] && { rm -f $R/rescan; changed+=" partition"; }   # set by devview
   [ "$old" = " $(tr '\n' ' ' < $R/visible) " ] && [ -z "$changed" ] && return 0
   # emhttpd does not rescan disks by itself: its cmdHotplug command makes it re-read /sys + by-id (devs.ini / disks.ini)
   log "a$N: disk view refreshed, visible: $(tr '\n' ' ' < $R/visible)(rescan: HTTP $(em_cmd $N 'cmdHotplug=apply'))"
 }
-dmview() {         # dmview add|remove dm-N MAJ:MIN - from udev: one device-mapper entry into/out of every filtered view, no rescan
-  local R k=$2 mm=$3
+# devview add|remove NAME MAJ:MIN - from udev, synchronously (emhttpd's udevadm settle waits for it): one partition or
+# device-mapper device into/out of every filtered view at once. emhttpd partitions a new pool disk during Format and
+# reads the partition back with lsblk, which skips a partition missing from /sys/dev/block (F16: mkfs got "/dev/").
+devview() {
+  local R a=$1 k=$2 mm=$3 l
   for R in $RUNROOT/a[2-9]; do [ -s $R/allow ] && [ -d $R/stage/block ] || continue
-    if [ "$1" = add ]; then ln -sfn "$(readlink /sys/block/$k)" $R/stage/block/$k; ln -sfn "$(readlink /sys/dev/block/$mm)" $R/stage/devblock/$mm
-    else rm -f $R/stage/block/$k $R/stage/devblock/$mm; fi
+    case $k in dm-*) ;; *) [[ "$(cat $R/allow)" == *" $(disk_of $k) "* ]] || continue ;; esac
+    if [ "$a" = add ]; then
+      case $k in dm-*) ln -sfn "$(readlink /sys/block/$k)" $R/stage/block/$k ;;
+        *) for l in /dev/disk/by-id/*; do [ "$(readlink $l)" = "../../$k" ] && ln -sfn "../../$k" $R/stage/byid/${l##*/}; done ;; esac
+      ln -sfn "$(readlink /sys/dev/block/$mm)" $R/stage/devblock/$mm
+    else rm -f $R/stage/block/$k $R/stage/devblock/$mm
+      for l in $R/stage/byid/*; do [ "$(readlink $l)" = "../../$k" ] && rm -f $l; done
+    fi
+    case $k in dm-*) ;; *) : > $R/rescan ;; esac   # the delayed refresh still has emhttpd rescan (as before this change)
   done
 }
 refresh() {        # all running instances; serialized, re-reads the flash config
@@ -168,6 +179,7 @@ prepare() {      # volatile per-start files in RAM
 start_one() {
   local N=$1 i
   inst_running $N && { echo "array $N already running"; return 0; }
+  [ -z "$(inst_pids $N)" ] || { echo "array $N: its previous emhttpd ended without stopping the array, and its processes still hold its disks. Clean up first: multiarray stop $N" >&2; log "a$N: start refused, leftovers of the previous instance"; return 1; }
   [ "$SERVICE" = enable ] || { echo "service disabled"; return 0; }
   # array 1's stop reloads the host md driver, which drops every instance's /proc/mdcmd binding: instances run only
   # while array 1 is started (its stopping event stops them first)
@@ -241,11 +253,15 @@ stop_one() {   # STOP_WAIT: seconds the whole stop may take (default 300)
       log "a$N: array state after stop: $st"
       md_is_stopped "$st" || { echo "array $N did not stop cleanly (mdState=$st); leaving it running" >&2; return 1; }
     fi
-    for p in $(inst_pids $N); do kill $p 2>/dev/null; done
-    for i in 1 2 3 4 5 6 7 8 9 10; do [ -z "$(inst_pids $N)" ] && break; sleep 1; done
-    for p in $(inst_pids $N); do kill -9 $p 2>/dev/null; done
+  elif [ -n "$(inst_pids $N)" ]; then
+    # emhttpd ended on its own (crashed): its php-fpm, nginx and shfs still hold the array's mounts in its namespace
+    log "a$N: emhttpd is not running; ending what is left in its namespace: $(for p in $(inst_pids $N); do printf '%s ' "$(cat /proc/$p/comm 2>/dev/null)"; done)"
   fi
-  export_own $N
+  for p in $(inst_pids $N); do kill $p 2>/dev/null; done
+  for i in 1 2 3 4 5 6 7 8 9 10; do [ -z "$(inst_pids $N)" ] && break; sleep 1; done
+  for p in $(inst_pids $N); do kill -9 $p 2>/dev/null; done
+  for i in 1 2 3 4 5; do [ -z "$(inst_pids $N)" ] && break; sleep 1; done   # the namespace (and its mounts) goes with its last process
+  export_own $N || { echo "array $N: driver left loaded until its zfs pool is exported (see above)" >&2; return 1; }
   # drv_unload stops an array the driver still has started (emhttpd started it after the check above)
   drv_unload $N || { echo "array $N: the driver could not stop the array, a disk is still in use; driver left loaded" >&2; return 1; }
   rm -f $RUNROOT/a$N/ns.id; rm -rf $RUNROOT/a$N/state/* $RUNROOT/a$N/run/* 2>/dev/null
@@ -273,11 +289,21 @@ hostfilter() {
 # array 1 is stopping: every instance must be gone before its md driver is reloaded (F15) and before it unmounts.
 # Stops all extra arrays in parallel within the host's shutdown time-out; an array that does not stop in time is
 # ended by force (its file systems go with its namespace, the array is left unclean) and that is reported.
+# Its pools: the list zfs-scope keeps, plus every imported pool on this array's own md devices (/dev/mdd1p1 for array 4;
+# only array N's driver has them), so a pool is found even when the list was lost (an older version forgot it).
+# A pool that does not export stays on the list (the next stop tries again) and is reported with the command to finish it.
 export_own() {   # pools an ended instance left imported (its emhttpd normally exports them at its stop)
-  local p; for p in $(cat $RUNROOT/a$1/zpools 2>/dev/null); do
+  local p e m keep="" f=$RUNROOT/a$1/zpools
+  for p in $( { cat $f 2>/dev/null; zpool status -P 2>/dev/null | awk -v re="^/dev/(mapper/)?$(drv_disk_prefix $1)[0-9]+p1$" '/^ *pool: /{p=$2} $1 ~ re {print p}'; } | sort -u); do
     zpool list -H -o name 2>/dev/null | grep -qx -- "$p" || continue
-    zpool export -f "$p" && log "a$1: exported its pool $p" || log "a$1: could not export its pool $p"; done
-  rm -f $RUNROOT/a$1/zpools
+    if e=$(zpool export -f "$p" 2>&1); then log "a$1: exported its pool $p"; continue; fi
+    keep+="$p "; e=$(echo "$e" | tr '\n' ' '); e=${e% }; m=$(echo "$e" | sed -n "s/.*cannot unmount '\([^']*\)'.*/\1/p")
+    log "a$1: could not export its pool $p: $e"
+    echo "array $1: its zfs pool '$p' is still imported: $e. Something still uses it, so array $1's disks stay in use and its driver stays loaded. See what uses it: ${m:+fuser -vm '$m'   (}where it is mounted: grep -h '^$p[ /]' /proc/[0-9]*/mounts | sort -u${m:+)}   When that is closed: zpool export $p   then: multiarray stop $1" >&2
+    /usr/local/emhttp/webGui/scripts/notify -e "Multi Arrays" -s "Array $1: zfs pool $p not exported" -d "Array $1 stopped, but its zfs pool $p is still imported ($e), so its disks stay in use. When nothing uses it any more: zpool export $p, then multiarray stop $1." -i warning >/dev/null 2>&1
+  done
+  if [ -n "$keep" ]; then echo "${keep% }" | tr ' ' '\n' > $f; return 1; fi
+  rm -f $f
 }
 force_end() {
   local N=$1 p i
@@ -304,19 +330,29 @@ stop_host() {
   return $rc
 }
 
-# ---- mover schedule of extra arrays ----
-# An instance's emhttpd writes its schedule to arrayN/plugins/dynamix/mover.cron, but the host's update_cron reads only
-# /boot/config/plugins/*/*.cron (and is a no-op inside instances). Collect every extra array's schedule into the
-# plugin's own multiarray.cron, as a line that runs that array's mover inside that array's namespace.
+# ---- mover and parity-check schedules of extra arrays ----
+# An instance writes its schedules to arrayN/plugins/dynamix/mover.cron and parity-check.cron, but the host's update_cron
+# reads only /boot/config/plugins/*/*.cron (and is a no-op inside instances). Collect every extra array's schedules into
+# the plugin's own multiarray.cron, as lines that run that array's mover / parity check inside that array.
 mover_cron() {
-  local N f s out="" new=$FLASH/multiarray.cron
+  local N f s c t w out="" new=$FLASH/multiarray.cron
   if [ "$SERVICE" = enable ]; then for N in $(seq 2 $ARRAYS); do f=$FLASH/array$N/plugins/dynamix/mover.cron
     s=$(grep -v '^[[:space:]]*#' $f 2>/dev/null | awk 'NF>=6 && /mover/{print $1,$2,$3,$4,$5; exit}')
     [ -n "$s" ] && out+="# array $N's mover (its own schedule, set on its Main$N tab or with: multiarray mover-schedule $N)"$'\n'"$s $PLUG/scripts/multiarray mover $N |& logger -t move"$'\n'
+    # parity check: the stock line is '<schedule> [<day test> && ]/usr/local/sbin/mdcmd check CORRECT|NOCORRECT ...'; the day
+    # test (first Monday, last day, ...) is kept. Cumulative checks (parity_control pause/resume lines) are not carried over.
+    f=$FLASH/array$N/plugins/dynamix/parity-check.cron
+    c=$(grep -v '^[[:space:]]*#' $f 2>/dev/null | grep -m1 'mdcmd check')
+    if [ -n "$c" ]; then
+      s=$(echo "$c" | awk '{print $1,$2,$3,$4,$5}'); t=""; w=NOCORRECT; [[ $c == *"check CORRECT"* ]] && w=CORRECT
+      [[ $c =~ (\[\[.*\]\])[[:space:]]*\&\& ]] && t="${BASH_REMATCH[1]} && "
+      out+="# array $N's parity check (its own schedule, set with: multiarray check-schedule $N)"$'\n'"$s $t$PLUG/scripts/multiarray parity-check $N $w |& logger -t parity-check"$'\n'
+      grep -q 'parity_control' $f && log "a$N: its parity-check schedule is cumulative (pause/resume); extra arrays run the check in one go"
+    fi
   done; fi
   if [ -z "$out" ]; then [ -e $new ] || return 0; rm -f $new
   else [ "$(cat $new 2>/dev/null)"$'\n' = "$out" ] && return 0; printf '%s' "$out" > $new; fi
-  /usr/local/sbin/update_cron; log "mover schedules of extra arrays: $(grep -c 'multiarray mover [0-9]' $new 2>/dev/null || echo 0) installed"
+  /usr/local/sbin/update_cron; log "schedules of extra arrays installed: mover $(cat $new 2>/dev/null | grep -c 'multiarray mover [0-9]'), parity check $(cat $new 2>/dev/null | grep -c 'multiarray parity-check [0-9]')"
 }
 mover_one() {    # cron: run array N's mover inside its namespace (its /mnt, shares and pools); skipped when not started
   local p; p=$(em_pid $1)
@@ -333,6 +369,31 @@ mover_schedule() {
   lg=$(inst_var $N shareMoverLogging)
   em_cmd $N "shareMoverSchedule=$c&shareMoverLogging=${lg:-no}&changeMover=Apply" >/dev/null || return 1
   sleep 1; mover_cron; echo "array $N mover schedule: $(inst_var $N shareMoverSchedule)"
+}
+
+# cron: start array N's parity check through its own emhttpd (the Check button; guarded like every request); skipped
+# when the array is not started or a check/sync already runs. W=CORRECT writes corrections, NOCORRECT only reports.
+parity_check_one() {
+  local N=$1 w=$2 o=""
+  inst_running $N && [ "$(inst_var $N mdState)" = STARTED ] || { log "a$N: scheduled parity check skipped: array $N is not started"; echo "array $N is not started, scheduled parity check skipped"; return 0; }
+  [ "$(inst_var $N mdResyncPos)" = 0 ] || { log "a$N: scheduled parity check skipped: a check or sync is already running"; echo "array $N: a check or sync is already running, scheduled check skipped"; return 0; }
+  [ "$w" = CORRECT ] && o="&optionCorrect=correct"
+  log "a$N: scheduled parity check ($w): HTTP $(em_cmd $N "startState=STARTED&cmdCheck=Check$o")"
+}
+# multiarray check-schedule N ['M H DoM Mon DoW' [correct]|off]: show or set array N's parity-check schedule. Written as
+# the stock Scheduler page writes it (arrayN/plugins/dynamix/parity-check.cron), then collected into multiarray.cron.
+check_schedule() {
+  local N=$1 c=$2 w=NOCORRECT f=$FLASH/array$1/plugins/dynamix/parity-check.cron
+  [[ $N =~ ^[2-9]$ ]] && [ $N -le $ARRAYS ] && [ -d $FLASH/array$N ] || { echo "array '$N' is not an extra array that has been started once (2..$ARRAYS)" >&2; return 1; }
+  if [ -z "$c" ]; then
+    echo "array $N parity-check schedule: $(grep -v '^#' $f 2>/dev/null | grep -m1 'mdcmd check' | awk '{w=($0 ~ /check CORRECT/)?"correct":"no corrections"; print $1,$2,$3,$4,$5" ("w")"}' | grep . || echo none)"; return 0; fi
+  if [ "$c" = off ]; then rm -f $f
+  else
+    [[ $c =~ ^[0-9*/,-]+( [0-9*/,-]+){4}$ ]] || { echo "not a cron schedule: '$c' (five fields, e.g. '0 2 1 * *' = on the 1st of every month at 02:00)" >&2; return 1; }
+    case "${3:-}" in "") ;; correct) w=CORRECT ;; *) echo "third argument: 'correct' (write corrections to parity) or nothing (only report errors, the default)" >&2; return 1 ;; esac
+    mkdir -p ${f%/*}; printf '# Generated parity check schedule:\n%s /usr/local/sbin/mdcmd check %s &> /dev/null\n' "$c" "$w" > $f
+  fi
+  mover_cron; check_schedule $N
 }
 
 targets() { case "$1" in ""|all) seq 2 $ARRAYS ;; *) echo "$1" ;; esac; }
@@ -408,13 +469,15 @@ case "$1" in
   stop)    [ "${3:-}" = --host ] && { stop_host; exit $?; }
            rc=0; for N in $(targets $2 | sort -rn); do stop_one $N || rc=1; done; exit $rc ;;
   restart) $0 stop $2; $0 start $2 ;;
-  status)  for N in $(seq 2 $ARRAYS); do echo "array $N: $(inst_running $N && echo running || echo stopped) mdState=$(inst_var $N mdState) port=$(port_of $N)"; done ;;
+  status)  for N in $(seq 2 $ARRAYS); do
+             if ! inst_running $N && [ -n "$(inst_pids $N)" ]; then echo "array $N: emhttpd ended unexpectedly, $(inst_pids $N | wc -l) processes left that hold its disks; clean up with: multiarray stop $N"; continue; fi
+             echo "array $N: $(inst_running $N && echo running || echo stopped) mdState=$(inst_var $N mdState) port=$(port_of $N)"; done ;;
   status-json) status_json ;;
   hostfilter) hostfilter ${2:-sync} ;;
   refresh) refresh ;;
   setup)   setup ;;
   apply)   apply ;;
-  dmview)  dmview "$2" "$3" "$4" ;;
+  devview|dmview) devview "$2" "$3" "$4" ;;   # dmview: the rule name before 2026.11.09n
   hotplug) ( sleep 2; setsid $0 refresh ) >/dev/null 2>&1 </dev/null & ;;   # from the udev rule: return at once, refresh after udev settles
   gen-pages) shift; exec $PLUG/scripts/gen-pages "$@" ;;
   em)      shift; em_cmd "$@" ;;
@@ -422,5 +485,7 @@ case "$1" in
   mover)   mover_one "$2" ;;
   mover-schedule) mover_schedule "$2" "$3" ;;
   mover-cron) mover_cron ;;
-  *) echo "usage: $0 start|stop|restart [N|all] | refresh | setup | apply | status | status-json | em N cmd | mover-schedule N ['M H DoM Mon DoW'|off] | export N | import plan|apply|start|check ..." >&2; exit 2 ;;
+  parity-check) parity_check_one "$2" "$3" ;;
+  check-schedule) check_schedule "$2" "$3" "$4" ;;
+  *) echo "usage: $0 start|stop|restart [N|all] | refresh | setup | apply | status | status-json | em N cmd | mover-schedule N ['M H DoM Mon DoW'|off] | check-schedule N ['M H DoM Mon DoW' [correct]|off] | export N | import plan|apply|start|check ..." >&2; exit 2 ;;
 esac
