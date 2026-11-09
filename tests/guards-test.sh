@@ -104,4 +104,15 @@ PATH=$T/zb:$PATH bash -c "log() { :; }; drv_disk_prefix() { echo mdf; }; RUNROOT
 grep -qx 'zpool export -f disk1' $T/zcalls && ! grep -q 'export -f hpool' $T/zcalls && ok "an unlisted pool on the array's own md devices is exported, another pool is not" || bad "export_own by device: $(tr '\n' ';' < $T/zcalls)"
 # F17: the stop path ends the namespace's processes even when emhttpd is gone; start refuses while leftovers run
 fn stop_one | grep -q '^  elif \[ -n "$(inst_pids $N)" \]; then' && fn stop_one | grep -q '^  for p in $(inst_pids $N); do kill $p' && fn start_one | grep -q 'ended without stopping the array' && ok "stop ends leftovers of a crashed emhttpd; start refuses while they run" || bad "stop/start leftovers"
+# status after a stop that kept an unexported zfs pool (driver still loaded, no instance left): say so, with the command
+mkdir -p $T/run/a7; printf 'disk1\n' > $T/run/a7/zpools; rm -f $T/run/a7/ns.id
+printf '#!/bin/bash\n[ "$1" = list ] && printf "disk1\\nhpool\\n"; exit 0\n' > $T/zb/zpool; printf 'disk1\ngone\n' > $T/run/a7/zpools   # gone: exported by hand since
+got=$(PATH=$T/zb:$PATH bash -c "inst_running() { return 1; }; inst_pids() { :; }; drv_loaded() { return 0; }; RUNROOT=$T/run LOG=/var/log/multiarray.log; $(fn stop_incomplete); stop_incomplete 7" 2>&1)
+[ "$got" = "stop incomplete: zfs pool disk1 not exported, driver still loaded; see the notification, then run: multiarray stop 7" ] && ok "status names a stop that kept an unexported zfs pool, with the command to finish it" || bad "stop_incomplete: '$got'"
+got=$(bash -c "inst_running() { return 1; }; inst_pids() { :; }; drv_loaded() { return 1; }; RUNROOT=$T/run; $(fn stop_incomplete); stop_incomplete 7" 2>&1)
+[ -z "$got" ] && ok "a cleanly stopped array (driver unloaded) is not reported as incomplete" || bad "stop_incomplete on a clean stop: '$got'"
+fn start_one | grep -q 'case $inc in \*"zfs pool"\*) echo "array $N: $inc"' && ok "start refuses with the same words while the pool is still imported" || bad "start_one does not name the incomplete stop"
+grep -q '"incomplete\\":\\"$inc\\"' $P/scripts/multiarray && grep -q 'inc=$(stop_incomplete $N); if \[ -n "$inc" \]' $P/scripts/multiarray && ok "status and status-json carry the incomplete stop" || bad "status/status-json without the incomplete stop"
+fn stop_one | grep -B1 '^  export_own $N ||' | grep -q 'rm -f $RUNROOT/a$N/ns.id' && ok "stop forgets the ended namespace before a pool export can fail (the GUI no longer shows the array as up)" || bad "stop_one keeps ns.id while the export fails"
+grep -q 'i.incomplete' $P/include/main.php && grep -q "(run||inc)?'':'none'" $P/include/main.php && grep -q "\$maSt\[\$n\]\['incomplete'\]" $P/MultiArray.page && ok "MainN bar and Settings show the incomplete stop; MainN offers Stop instance to finish it" || bad "GUI does not show the incomplete stop"
 [ $f -eq 0 ] && echo "guards tests: all $n passed" || { echo "guards tests: $f failed"; exit 1; }

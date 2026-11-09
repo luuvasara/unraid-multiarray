@@ -59,8 +59,9 @@ $rows = $choices; foreach ($pin as $id=>$n) if (!isset($rows[$id])) $rows[$id] =
 <div class="title"><span class="left"><i class="fa fa-bug title"></i>Debug</span></div>
 <dl><dt>First instance GUI port (array 2; array N uses port + N - 2):</dt><dd><input type="number" name="BASEPORT" min="1024" max="65000" value="<?=htmlspecialchars($cfg['BASEPORT'])?>" class="narrow"></dd></dl>
 <dl><dt>Instance GUIs (each extra array's own, unmodified Unraid web GUI; for debugging only. They listen on the server's loopback address, so use the MainN tabs; for debugging, open an SSH tunnel, e.g. <code>ssh -L 8081:127.0.0.1:8081 root@server</code>, then http://localhost:8081):</dt><dd>
-<?for ($n=2; $n<=$total; $n++): $p = (int)$cfg['BASEPORT'] + $n - 2;?>
-  Array <?=$n?>: 127.0.0.1:<?=$p?><?=ma_ready($n)?'':' &mdash; instance not running'?><br>
+<?$maSt = []; foreach ((array)json_decode((string)shell_exec('/usr/local/emhttp/plugins/multiarray/scripts/multiarray status-json'), true) as $i) $maSt[$i['n'] ?? 0] = $i;?>
+<?for ($n=2; $n<=$total; $n++): $p = (int)$cfg['BASEPORT'] + $n - 2; $inc = $maSt[$n]['incomplete'] ?? '';?>
+  Array <?=$n?>: 127.0.0.1:<?=$p?><?if ($inc):?> &mdash; <span title="Something still uses array <?=$n?>'s disks, so its driver stays loaded and the array cannot start again. The notification names what to check (example: fuser -vm '/mnt/disk1'). Close it, then use Stop instance on its Main<?=$n?> tab (same as: multiarray stop <?=$n?>)." style="cursor:help;border-bottom:1px dotted"><?=htmlspecialchars($inc)?></span><?elseif (!ma_ready($n)):?> &mdash; instance not running<?endif;?><br>
 <?endfor;?>
 </dd></dl>
 

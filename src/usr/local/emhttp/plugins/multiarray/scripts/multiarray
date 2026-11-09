@@ -181,6 +181,8 @@ start_one() {
   inst_running $N && { echo "array $N already running"; return 0; }
   [ -z "$(inst_pids $N)" ] || { echo "array $N: its previous emhttpd ended without stopping the array, and its processes still hold its disks. Clean up first: multiarray stop $N" >&2; log "a$N: start refused, leftovers of the previous instance"; return 1; }
   [ "$SERVICE" = enable ] || { echo "service disabled"; return 0; }
+  local inc; inc=$(stop_incomplete $N)   # its last stop kept a zfs pool imported: the driver cannot go until it is exported
+  case $inc in *"zfs pool"*) echo "array $N: $inc" >&2; log "a$N: start refused, $inc"; return 1 ;; esac
   # array 1's stop reloads the host md driver, which drops every instance's /proc/mdcmd binding: instances run only
   # while array 1 is started (its stopping event stops them first)
   host_started || { echo "array $N not started: array 1 is not started" >&2; log "a$N: start refused, array 1 not started"; return 1; }
@@ -233,6 +235,17 @@ em_cmd() {   # em_cmd N 'cmdStop=Stop'   (@STATE@ expands to mdState). Returns w
     curl -s -m '"${EM_TIMEOUT:-30}"' --unix-socket /var/run/emhttpd.socket -X POST http://localhost/update.htm --data "csrf_token=$T&${1//@STATE@/$S}" -o /dev/null -w "%{http_code}\n"' _ "$2"
 }
 
+# why array N's last stop did not finish (no instance left, but its driver is still loaded), or nothing. Used by status,
+# status-json (Main tab and Settings) and start.
+stop_incomplete() {
+  local N=$1 p
+  inst_running $N && return 0; [ -z "$(inst_pids $N)" ] || return 0; drv_loaded $N || return 0
+  p=$(zpool list -H -o name 2>/dev/null | grep -sxF -f - $RUNROOT/a$N/zpools | tr '\n' ' '); p=${p% }   # still imported ones
+  if [ -n "$p" ]; then echo "stop incomplete: zfs pool ${p// /, } not exported, driver still loaded; see the notification, then run: multiarray stop $N"
+  else echo "stop incomplete: driver still loaded (a disk of array $N is still in use); see $LOG, then run: multiarray stop $N"; fi
+}
+busy_lock() { ! flock -n $RUNROOT/lock true 2>/dev/null; }   # a start or stop holds the lock (its driver may be loaded mid-way)
+
 # every mdState emhttpd/the driver reports for an array that is not running (md_unraid.c): STOPPED, and the stopped-but-
 # not-startable-as-is states NEW_ARRAY RECON_DISK DISABLE_DISK SWAP_DSBL ERROR:*. Never STARTED, empty or anything unknown.
 md_is_stopped() { case "$1" in STOPPED|NEW_ARRAY|RECON_DISK|DISABLE_DISK|SWAP_DSBL|ERROR:*) return 0;; esac; return 1; }
@@ -261,6 +274,8 @@ stop_one() {   # STOP_WAIT: seconds the whole stop may take (default 300)
   for i in 1 2 3 4 5 6 7 8 9 10; do [ -z "$(inst_pids $N)" ] && break; sleep 1; done
   for p in $(inst_pids $N); do kill -9 $p 2>/dev/null; done
   for i in 1 2 3 4 5; do [ -z "$(inst_pids $N)" ] && break; sleep 1; done   # the namespace (and its mounts) goes with its last process
+  # the namespace is gone: forget it now, so the GUI does not show array N as up while a failed export below waits for a hand
+  [ -z "$(inst_pids $N)" ] && rm -f $RUNROOT/a$N/ns.id
   export_own $N || { echo "array $N: driver left loaded until its zfs pool is exported (see above)" >&2; return 1; }
   # drv_unload stops an array the driver still has started (emhttpd started it after the check above)
   drv_unload $N || { echo "array $N: the driver could not stop the array, a disk is still in use; driver left loaded" >&2; return 1; }
@@ -419,6 +434,7 @@ setup() {
     [ -s $ko ] && { echo "multiarray: could not fetch the updated md_unraid$N.ko for kernel $KVER, keeping the cached one"; continue; }
     echo "multiarray: no driver build for kernel $KVER (md_unraid$N) - extra arrays stay disabled until the plugin is updated"; break
   done
+  for N in 2 3 4 5 6 7 8 9; do [ -f $RUNROOT/a$N/ns.id ] && [ -z "$(inst_pids $N)" ] && rm -f $RUNROOT/a$N/ns.id; done   # dead namespace
   $PLUG/scripts/gen-pages || echo "multiarray: gen-pages: stock page changed, see /var/log/syslog"
   hostfilter sync
   udevadm control --reload 2>/dev/null
@@ -456,8 +472,9 @@ apply() {
 status_json() {
   local N sep=""; echo -n '['
   for N in $(seq 2 9); do
-    local run=false st="" ; inst_running $N && { run=true; st=$(inst_var $N mdState); }
-    echo -n "$sep{\"n\":$N,\"enabled\":$([ $N -le $ARRAYS ] && echo true || echo false),\"running\":$run,\"mdState\":\"$st\",\"fsState\":\"$(inst_var $N fsState)\",\"port\":$(port_of $N),\"driver\":$(drv_check $N 2>/dev/null && echo '"ok"' || echo '"missing"')}"
+    local run=false st="" inc="" ; inst_running $N && { run=true; st=$(inst_var $N mdState); }
+    [ $run = true ] || busy_lock || inc=$(stop_incomplete $N)
+    echo -n "$sep{\"n\":$N,\"enabled\":$([ $N -le $ARRAYS ] && echo true || echo false),\"running\":$run,\"mdState\":\"$st\",\"fsState\":\"$(inst_var $N fsState)\",\"port\":$(port_of $N),\"driver\":$(drv_check $N 2>/dev/null && echo '"ok"' || echo '"missing"'),\"incomplete\":\"$inc\"}"
     sep=","
   done; echo ']'
 }
@@ -471,6 +488,7 @@ case "$1" in
   restart) $0 stop $2; $0 start $2 ;;
   status)  for N in $(seq 2 $ARRAYS); do
              if ! inst_running $N && [ -n "$(inst_pids $N)" ]; then echo "array $N: emhttpd ended unexpectedly, $(inst_pids $N | wc -l) processes left that hold its disks; clean up with: multiarray stop $N"; continue; fi
+             inc=$(stop_incomplete $N); if [ -n "$inc" ]; then busy_lock && echo "array $N: starting or stopping now (driver loaded, emhttpd not up)" || echo "array $N: $inc"; continue; fi
              echo "array $N: $(inst_running $N && echo running || echo stopped) mdState=$(inst_var $N mdState) port=$(port_of $N)"; done ;;
   status-json) status_json ;;
   hostfilter) hostfilter ${2:-sync} ;;
