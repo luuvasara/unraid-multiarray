@@ -8,10 +8,15 @@
 Run several independent parity-protected arrays on one Unraid server (default: three), each with
 its own Main tab: Main, Main2, Main3.
 
-> **Proof of concept. Do not install this on a production server.**
-> It exists to show that multiple arrays are within easy reach for Unraid itself, not to replace
-> built-in support. It loads its own copies of the parity driver and has only been tested in a VM.
-> Use a test machine or a VM with disks you don't care about.
+> **Proof of concept. Running it on production data is not recommended at this stage.**
+> This proof of concept imitates multiple arrays by running an extra, isolated copy of Unraid's standard
+> array services for each array, side by side on the same server. Real multiple-array support needs
+> Lime Technology to build the per-array differences that the plugin handles into Unraid itself, where
+> the arrays won't need isolating from each other. The point of the plugin is to show that it can be
+> done, and without much effort.
+>
+> It loads its own copies of the parity driver. It has been tested mainly in a VM and is now also
+> installed on real hardware. Try it on a test machine or with disks you don't care about.
 >
 > The webGUI side of this is proposed upstream in [unraid/webgui#2813](https://github.com/unraid/webgui/pull/2813).
 
@@ -114,7 +119,7 @@ Settings › Multi Arrays › Export and import moves a whole array to another s
 
 ## Status
 
-Proof of concept (see the warning above), tested in a VM on Unraid 7.3.4 (all with three arrays running at once):
+Proof of concept (see the note above), tested on Unraid 7.3.4, mainly in a VM (all with three arrays running at once):
 - parity sync and parity checks in parallel, 0 errors
 - disk failure with emulated reads, then rebuild
 - start/stop cycles of the main array
