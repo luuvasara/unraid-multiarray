@@ -2,15 +2,15 @@
 <!DOCTYPE PLUGIN [
 <!ENTITY name    "multiarray">
 <!ENTITY author  "Multi Arrays project">
-<!ENTITY version "2026.11.09k">
+<!ENTITY version "2026.11.09m">
 <!ENTITY source  "https://raw.githubusercontent.com/luuvasara/unraid-multiarray/main">
 <!ENTITY base    "/boot/config/plugins/&name;">
-<!ENTITY md5     "7743fa49b776f6e41c09acefc44bff9e">
+<!ENTITY md5     "b5a7d415d3be199fc21dbe1fe9cf7b36">
 ]>
 <PLUGIN name="&name;" author="&author;" version="&version;" min="7.3.0" icon="server" launch="Settings/MultiArray" pluginURL="&source;/&name;.plg" support="https://github.com/luuvasara/unraid-multiarray/issues">
 
 <CHANGES>
-###2026.11.09k
+###2026.11.09m
 - Safety: an extra array can no longer reach array 1's driver. Stopping array 1 reloads its driver, which used to leave a still-running extra array talking to array 1. Extra arrays now start only while array 1 is started, are always gone before array 1 stops, and an extra array that loses its own driver is ended at once instead of sending anything on.
 - Safety: zfs pools stay with their array. Each array mounts, changes and exports only its own pools (before, starting any array mounted every other array's and array 1's zfs pools over its own disks). An array whose zfs pool name is already in use on the server (pool names are server-wide; an array zfs disk is a pool named after its slot, disk1, disk2, ...) is not started or formatted, and the reason is shown.
 - Stopping array 1, rebooting or shutting down no longer waits forever for an extra array that cannot stop. Extra arrays are stopped together within the shutdown time-out; one that does not stop in time is ended (it is then unclean) and a notification says so.
@@ -21,6 +21,9 @@
 - Each extra array's own web GUI now listens only on the server itself (127.0.0.1), so every request goes through the host GUI's Main tabs, where the safety checks run. For debugging, reach one through an SSH tunnel (Settings, Multi Arrays shows the ports).
 - The Browse icons on an extra array's Main tab are gone: they opened array 1's folders of the same name (/mnt/disk1, ...), not the extra array's.
 - Fix: an extra array's Main tab no longer hides the disks pinned to that array from its own assign lists (it used array 1's filter).
+- An extra array's mover schedule now runs: the host's cron runs each extra array's mover inside that array, on that array's own schedule (before, only Move on its Main tab moved anything). Set it with multiarray mover-schedule N '0 3 * * *' (example: every day at 03:00); the Schedule link on its Main tab says so.
+- Export records more of the array, so an import can recreate it: the zfs pool name of each zfs disk, the array's pools (devices, file system, profile, settings) and its share settings. A disk whose setting says zfs but holds no file system is exported as having none, with a warning; zfs is always written as zfs. Older export files still import.
+- Import checks zfs pool names in the plan: a name already used on this server (zfs pool names are server-wide; an array zfs disk is named after its slot, disk1, ...) is refused before anything is assigned, with what to do. The plan lists the array's pools with the steps to add them on the Main tab (they are not created automatically, so nothing is formatted by mistake) and pins their disks to the array; share settings are written into the extra array's config where it has none.
 - After updating, stop and start each extra array once so it runs with these changes.
 ###2026.11.08g
 - Fix: stopping an extra array while it was still starting could leave its disks behind in the kernel. Until a reboot, that array's disk1 could then not be mounted, and stopping it again or listing disks (lsblk) caused kernel errors. The driver now stops a started array when it is unloaded and gives up a disk it could not add, and the plugin waits for a start in progress before it stops an array.
@@ -108,6 +111,8 @@ removepkg &base;/&name;-*.txz
 udevadm control --reload 2&gt;/dev/null
 rm -f &base;/&name;-*.txz
 rm -rf &base;/ko /var/lib/multiarray /var/run/&name;
+# the extra arrays' mover schedules go with the plugin (they are kept in each arrayN folder)
+[ -e &base;/&name;.cron ] &amp;&amp; { rm -f &base;/&name;.cron; /usr/local/sbin/update_cron; }
 echo "multiarray removed; array configs kept in &base;/array*/"
 </INLINE>
 </FILE>
