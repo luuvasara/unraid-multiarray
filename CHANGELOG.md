@@ -2,6 +2,9 @@
 
 Copied by the build from the <CHANGES> block of multiarray.plg; edit the .plg, not this file.
 
+## 2026.11.10a
+- Extra arrays now send Unraid's own notifications, like array 1: disk utilization, disk temperature, SMART, disk errors, pool status and "Parity-Check started/finished". Unraid's unchanged monitor runs for each started extra array, on array 1's system-monitoring schedule (Settings, Notifications), with that array's own state, thresholds and memory of what it already reported, so each warning comes once. Every such notification begins with the array's number (example: Array 2: Warning [TOWER-A2] - Disk 1 is high on usage (15%)) and links to that array's Main tab; it goes where array 1's notifications go (the GUI, e-mail, agents). Unassigned disks are still reported by array 1 alone.
+- After updating, nothing needs restarting: running extra arrays are watched from the next minute on, and the first run reports what is already above a threshold (as after a reboot).
 ## 2026.11.09t
 - Safety: an extra array can no longer reach array 1's driver. Stopping array 1 reloads its driver, which used to leave a still-running extra array talking to array 1. Extra arrays now start only while array 1 is started, are always gone before array 1 stops, and an extra array that loses its own driver is ended at once instead of sending anything on.
 - Safety: zfs pools stay with their array. Each array mounts, changes and exports only its own pools (before, starting any array mounted every other array's and array 1's zfs pools over its own disks). An array whose zfs pool name is already in use on the server (pool names are server-wide; an array zfs disk is a pool named after its slot, disk1, disk2, ...) is not started or formatted, and the reason is shown.
