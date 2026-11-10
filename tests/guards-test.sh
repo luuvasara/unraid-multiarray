@@ -98,6 +98,14 @@ mkdir -p $T/zb $T/run/a6; printf '#!/bin/bash\ncase "$1 ${@: -1}" in "list "*) p
 printf 'disk1\ncache\n' > $T/run/a6/zpools
 PATH=$T/zb:$PATH bash -c "log() { :; }; drv_disk_prefix() { echo mdf; }; RUNROOT=$T/run; $(fn export_own); export_own 6" 2>$T/err; rc=$?
 [ $rc = 1 ] && [ "$(cat $T/run/a6/zpools)" = disk1 ] && grep -q "pool is busy" $T/err && grep -q "zpool export disk1" $T/err && ok "a pool that did not export is kept and reported with the reason and the command; the exported one is forgotten" || bad "export_own: rc=$rc list=$(cat $T/run/a6/zpools 2>&1) err=$(cat $T/err)"
+# one notification per pool and incident: retries of a held pool only log; an export (or a start) ends the incident
+printf '#!/bin/bash\necho "$*" >> %s/ncalls\n' $T > $T/zb/notify; chmod +x $T/zb/notify; rm -f $T/ncalls; rm -rf $T/run/a6/notified
+printf '#!/bin/bash\ncase "$1 ${@: -1}" in "list "*) printf "disk1\\n" ;; "export disk1") [ -e %s/held ] && { echo "cannot unmount '"'"'/mnt/disk1'"'"': pool or dataset is busy" >&2; exit 1; } ;; esac; exit 0\n' $T > $T/zb/zpool; touch $T/held
+eo() { printf 'disk1\n' > $T/run/a6/zpools; PATH=$T/zb:$PATH MA_TEST_NOTIFY=$T/zb/notify bash -c "log() { :; }; drv_disk_prefix() { echo mdf; }; RUNROOT=$T/run LOG=/var/log/multiarray.log; $(fn export_own); export_own 6" 2>$T/err; }
+eo; eo; eo; c1=$(wc -l < $T/ncalls); grep -q "e.g.: fuser -vm '/mnt/disk1'. When" $T/ncalls && grep -q "zpool export disk1, then multiarray stop 6" $T/ncalls && fx=1 || fx=0
+rm -f $T/held; eo; ls $T/run/a6/notified >/dev/null 2>&1 && gone=0 || gone=1; touch $T/held; eo; c2=$(wc -l < $T/ncalls)
+[ "$c1" = 1 ] && [ $fx = 1 ] && [ $gone = 1 ] && [ "$c2" = 2 ] && grep -q "zpool export disk1" $T/err && ok "a held pool notifies once over 3 failed stops (with fuser/zpool export/multiarray stop), again after it exported and failed anew" || bad "notify once: first=$c1 fuser=$fx marker-gone=$gone after=$c2 calls=$(cat $T/ncalls)"
+fn start_one | grep -q 'rm -rf $RUNROOT/a$N/notified' && ok "a start ends the incident (the next failed export notifies again)" || bad "start_one keeps the notified markers"
 # F17: a pool on the array's own md devices is exported even when the list was lost (09m forgot it after a failed export)
 printf '#!/bin/bash\necho "zpool $*" >> %s/zcalls\ncase $1 in list) printf "disk1\\nhpool\\n" ;; status) printf "  pool: hpool\\n\\thpool ONLINE\\n\\t  /dev/sdb1 ONLINE\\n  pool: disk1\\n\\tdisk1 ONLINE\\n\\t  /dev/mdf1p1  ONLINE 0 0 0\\n" ;; esac; exit 0\n' $T > $T/zb/zpool; rm -f $T/run/a6/zpools $T/zcalls
 PATH=$T/zb:$PATH bash -c "log() { :; }; drv_disk_prefix() { echo mdf; }; RUNROOT=$T/run; $(fn export_own); export_own 6" 2>$T/err

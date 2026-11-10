@@ -188,6 +188,7 @@ start_one() {
   host_started || { echo "array $N not started: array 1 is not started" >&2; log "a$N: start refused, array 1 not started"; return 1; }
   drv_check $N || return 3
   drv_loaded $N && { log "a$N: stale driver module, unloading"; drv_unload $N || { echo "array $N: a stale driver still has a disk in use, see $LOG" >&2; return 1; }; }
+  rm -rf $RUNROOT/a$N/notified   # a start begins a new incident: a pool that fails to export at the next stop notifies again (export_own)
   seed_flash $N
   mkdir -p $FLASH/array$N/pools $FLASH/array$N/shares   # emhttpd does not create them: Add Pool and share settings need them
   prepare $N
@@ -307,16 +308,25 @@ hostfilter() {
 # Its pools: the list zfs-scope keeps, plus every imported pool on this array's own md devices (/dev/mdd1p1 for array 4;
 # only array N's driver has them), so a pool is found even when the list was lost (an older version forgot it).
 # A pool that does not export stays on the list (the next stop tries again) and is reported with the command to finish it.
+# The Unraid notification is raised once per pool and incident: every retry (multiarray stop N, Stop instance) failed
+# the same way and raised another identical one (4 for one held pool in fix round 4). aN/notified/<pool> marks a pool
+# already notified; it goes when the pool is no longer imported (exported here or by hand) and when the array starts,
+# so a later failure is a new incident and notifies again. Retries still log and print the full message.
 export_own() {   # pools an ended instance left imported (its emhttpd normally exports them at its stop)
-  local p e m keep="" f=$RUNROOT/a$1/zpools
+  local p e m w keep="" f=$RUNROOT/a$1/zpools nd=$RUNROOT/a$1/notified
   for p in $( { cat $f 2>/dev/null; zpool status -P 2>/dev/null | awk -v re="^/dev/(mapper/)?$(drv_disk_prefix $1)[0-9]+p1$" '/^ *pool: /{p=$2} $1 ~ re {print p}'; } | sort -u); do
     zpool list -H -o name 2>/dev/null | grep -qx -- "$p" || continue
     if e=$(zpool export -f "$p" 2>&1); then log "a$1: exported its pool $p"; continue; fi
     keep+="$p "; e=$(echo "$e" | tr '\n' ' '); e=${e% }; m=$(echo "$e" | sed -n "s/.*cannot unmount '\([^']*\)'.*/\1/p")
     log "a$1: could not export its pool $p: $e"
     echo "array $1: its zfs pool '$p' is still imported: $e. Something still uses it, so array $1's disks stay in use and its driver stays loaded. See what uses it: ${m:+fuser -vm '$m'   (}where it is mounted: grep -h '^$p[ /]' /proc/[0-9]*/mounts | sort -u${m:+)}   When that is closed: zpool export $p   then: multiarray stop $1" >&2
-    /usr/local/emhttp/webGui/scripts/notify -e "Multi Arrays" -s "Array $1: zfs pool $p not exported" -d "Array $1 stopped, but its zfs pool $p is still imported ($e), so its disks stay in use. When nothing uses it any more: zpool export $p, then multiarray stop $1." -i warning >/dev/null 2>&1
+    if [ -e "$nd/$p" ]; then log "a$1: pool $p still not exported; notification already raised for this incident, not repeated"; continue; fi
+    w="grep -h '^${p}[ /]' /proc/[0-9]*/mounts"; [ -n "$m" ] && w="fuser -vm '$m'"   # what to run first: the busy mount point, or where the pool is mounted
+    ${MA_TEST_NOTIFY:-/usr/local/emhttp/webGui/scripts/notify} -e "Multi Arrays" -s "Array $1: zfs pool $p not exported" -d "Array $1 stopped, but its zfs pool $p is still imported ($e), so its disks stay in use. See what uses it, e.g.: $w. When nothing uses it any more: zpool export $p, then multiarray stop $1. Later stops that fail the same way are only logged in $LOG." -i warning >/dev/null 2>&1
+    mkdir -p "$nd" && touch "$nd/$p"
   done
+  for p in "$nd"/*; do [ -e "$p" ] || continue; [[ " $keep" == *" ${p##*/} "* ]] || rm -f "$p"; done   # exported: incident over
+  rmdir "$nd" 2>/dev/null
   if [ -n "$keep" ]; then echo "${keep% }" | tr ' ' '\n' > $f; return 1; fi
   rm -f $f
 }
