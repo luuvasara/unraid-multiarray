@@ -76,6 +76,8 @@ picked up automatically.
 - Schedules: an extra array's mover and parity check run from the host's cron, set with
   `multiarray mover-schedule N` and `multiarray check-schedule N ['M H DoM Mon DoW' [correct]|off]`
   (ex. `multiarray check-schedule 2 '0 2 1 * *'` checks array 2 at 02:00 on the 1st of each month; extra arrays start without one)
+- Notifications: Unraid's own disk and parity-check notifications come for extra arrays too, each beginning with
+  the array's number (ex. `Array 2: Notice [TOWER-A2] - Parity-Check started`), on array 1's monitoring schedule
 - Log: `/var/log/multiarray.log`
 
 ## Disks
@@ -127,7 +129,6 @@ Proof of concept (see the note above), tested on Unraid 7.3.4, mainly in a VM (a
 
 Not yet:
 - share export (SMB/NFS) for extra arrays
-- Unraid's routine alerts (parity check finished, disk errors, temperatures) for extra arrays
 - per-disk pages on MainN
 - a driver build is needed per Unraid kernel version
 

@@ -1,0 +1,21 @@
+#!/bin/bash
+# Bound over the stock dynamix notify only while the stock monitor runs for extra array $MA_N (multiarray monitor_all).
+# The monitor's own call is kept as it is, with two changes:
+#  - "Array N: " in front of the event and the subject, so a notification, an e-mail or an agent message says which
+#    array it is about (ex. "Array 2: Warning [TOWER-A2] - Disk 1 is high on usage (15%)"); it also keeps array 1's and
+#    array N's notifications of the same second apart (notify names its file after the event and the time).
+#  - the link /Main goes to that array's Main tab (/Main2).
+# It is delivered by the stock notify in the host's mount namespace (pid 1): the unread list, the archive, the
+# notification settings, e-mail and agents are array 1's, which is where the host GUI shows them.
+N=${MA_N:?MA_N: the extra array number, set by multiarray monitor}
+a=() subj=""
+while [ $# -gt 0 ]; do
+  case $1 in
+    -e) a+=(-e "Array $N: $2"); shift 2 ;;
+    -s) a+=(-s "Array $N: $2"); subj=$2; shift 2 ;;
+    -l) if [ "$2" = /Main ]; then a+=(-l "/Main$N"); else a+=(-l "$2"); fi; shift 2 ;;
+    *)  a+=("$1"); shift ;;
+  esac
+done
+[ -n "$subj" ] && logger -t multiarray "array $N notification: $subj"
+exec nsenter -t 1 -m -u -- /usr/local/emhttp/plugins/dynamix/scripts/notify "${a[@]}"

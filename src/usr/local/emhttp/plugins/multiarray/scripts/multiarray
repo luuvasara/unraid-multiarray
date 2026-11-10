@@ -5,7 +5,7 @@
 case "$1" in
   export) shift; exec /usr/local/emhttp/plugins/multiarray/scripts/xport export "$@" ;;   # read-only, works with extra arrays disabled
   import) shift; exec /usr/local/emhttp/plugins/multiarray/scripts/xport "$@" ;;
-  hotplug|devview|dmview|refresh|start|restart|setup|gen-pages|hostfilter|mover|mover-schedule|mover-cron|parity-check|check-schedule)
+  hotplug|devview|dmview|refresh|start|restart|setup|gen-pages|hostfilter|mover|mover-schedule|mover-cron|parity-check|check-schedule|monitor)
     [ "$1 ${2:-}" = "hostfilter off" ] || grep -qs '^SERVICE="enable"' /boot/config/plugins/multiarray/multiarray.cfg || exit 0 ;;
 esac
 . /usr/local/emhttp/plugins/multiarray/scripts/lib.sh
@@ -364,10 +364,47 @@ mover_cron() {
       out+="# array $N's parity check (its own schedule, set with: multiarray check-schedule $N)"$'\n'"$s $t$PLUG/scripts/multiarray parity-check $N $w |& logger -t parity-check"$'\n'
       grep -q 'parity_control' $f && log "a$N: its parity-check schedule is cumulative (pause/resume); extra arrays run the check in one go"
     fi
-  done; fi
+  done
+  # notifications of extra arrays: on array 1's own system-monitoring schedule (Settings, Notifications; the stock
+  # dynamix monitor.cron), so turning it off there turns it off for every array. monitor_all follows a change of it.
+  s=$(grep -v '^[[:space:]]*#' /boot/config/plugins/dynamix/monitor.cron 2>/dev/null | awk 'NF>=6 && /scripts\/monitor/{print $1,$2,$3,$4,$5; exit}')
+  [ -n "$s" ] && [ $ARRAYS -ge 2 ] && out+="# extra arrays' notifications (disk temperature, errors, SMART, utilization, parity check): array 1's monitoring schedule"$'\n'"$s $PLUG/scripts/multiarray monitor &> /dev/null"$'\n'
+  fi
   if [ -z "$out" ]; then [ -e $new ] || return 0; rm -f $new
   else [ "$(cat $new 2>/dev/null)"$'\n' = "$out" ] && return 0; printf '%s' "$out" > $new; fi
-  /usr/local/sbin/update_cron; log "schedules of extra arrays installed: mover $(cat $new 2>/dev/null | grep -c 'multiarray mover [0-9]'), parity check $(cat $new 2>/dev/null | grep -c 'multiarray parity-check [0-9]')"
+  /usr/local/sbin/update_cron; log "schedules of extra arrays installed: mover $(cat $new 2>/dev/null | grep -c 'multiarray mover [0-9]'), parity check $(cat $new 2>/dev/null | grep -c 'multiarray parity-check [0-9]'), notifications $(cat $new 2>/dev/null | grep -c 'multiarray monitor')"
+}
+# cron (the line mover_cron writes): Unraid's own notifications for every started extra array. The STOCK dynamix monitor
+# (disk temperature, SMART, utilization, disk errors, pool status, "Parity-Check started/finished") is run unchanged,
+# once per array, inside that array's namespace, where everything it reads and keeps is already that array's own:
+#   /var/local/emhttp/var.ini, disks.ini, smart/   that array's state (its emhttpd)
+#   /boot/config (dynamix.cfg thresholds, disk.cfg, parity-checks.log)   arrayN/ on the flash
+#   /var/local/emhttp/monitor.ini + /boot/config/plugins/dynamix/monitor.ini   its "already warned" memory, so a warning
+#     is sent once per array and one array's memory never silences or repeats another's
+# Three binds, in a private mount namespace that lives only for that run, finish the job without a patched copy:
+#   /var/tmp      the folder the generated parity_listN keeps resync.ini/stamps.ini in (the duration in "finished")
+#   devs.ini      empty: the unassigned devices are array 1's to watch (its monitor sees every disk of the server);
+#                 an extra array would send each of those warnings a second time
+#   notify        monitor-notify: "Array N: " in front of event and subject (ex. "Array 2: Notice [TOWER-A2] -
+#                 Parity-Check started"), delivered by array 1's notify in the host namespace, which has the unread
+#                 list, the archive, e-mail and agents (an extra array's /tmp and /boot/config have none of them)
+# Skipped while a start or stop holds the lock (the array's state files change under it), for arrays that are not
+# started, and when the previous run is still going (no two runs at once).
+monitor_all() {
+  local N p R e=$RUNROOT/empty.ini D=/usr/local/emhttp/plugins/dynamix/scripts
+  exec 7>$RUNROOT/monitor.lock
+  flock -n 7 || { log "notifications of extra arrays: the previous run is still going, this run skipped"; return 0; }
+  : > $e
+  for N in $(seq 2 $ARRAYS); do
+    busy_lock && { log "notifications of extra arrays: an array is starting or stopping, this run skipped"; break; }
+    p=$(em_pid $N); [ -n "$p" ] && [ "$(inst_var $N mdState)" = STARTED ] || continue
+    R=$RUNROOT/a$N; mkdir -p $R/vartmp
+    MA_N=$N timeout 50 nsenter -t $p -m -u -- unshare -m --propagation private sh -c "mount --bind $R/vartmp /var/tmp &&
+      { [ ! -e /var/local/emhttp/devs.ini ] || mount --bind $e /var/local/emhttp/devs.ini; } &&
+      mount --bind $PLUG/scripts/monitor-notify $D/notify && exec $D/monitor" 7>&- 8>&- 9>&- </dev/null >>$LOG 2>&1 \
+      || log "a$N: the notification check (stock monitor) ended with code $? (124 = still running after 50 s)"
+  done
+  mover_cron   # array 1's monitoring schedule changed or was turned off: the next run uses it
 }
 mover_one() {    # cron: run array N's mover inside its namespace (its /mnt, shares and pools); skipped when not started
   local p; p=$(em_pid $1)
@@ -505,5 +542,6 @@ case "$1" in
   mover-cron) mover_cron ;;
   parity-check) parity_check_one "$2" "$3" ;;
   check-schedule) check_schedule "$2" "$3" "$4" ;;
+  monitor) monitor_all ;;
   *) echo "usage: $0 start|stop|restart [N|all] | refresh | setup | apply | status | status-json | em N cmd | mover-schedule N ['M H DoM Mon DoW'|off] | check-schedule N ['M H DoM Mon DoW' [correct]|off] | export N | import plan|apply|start|check ..." >&2; exit 2 ;;
 esac
