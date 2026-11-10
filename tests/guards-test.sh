@@ -116,7 +116,7 @@ fn stop_one | grep -q '^  elif \[ -n "$(inst_pids $N)" \]; then' && fn stop_one 
 mkdir -p $T/run/a7; printf 'disk1\n' > $T/run/a7/zpools; rm -f $T/run/a7/ns.id
 printf '#!/bin/bash\n[ "$1" = list ] && printf "disk1\\nhpool\\n"; exit 0\n' > $T/zb/zpool; printf 'disk1\ngone\n' > $T/run/a7/zpools   # gone: exported by hand since
 got=$(PATH=$T/zb:$PATH bash -c "inst_running() { return 1; }; inst_pids() { :; }; drv_loaded() { return 0; }; RUNROOT=$T/run LOG=/var/log/multiarray.log; $(fn stop_incomplete); stop_incomplete 7" 2>&1)
-[ "$got" = "stop incomplete: zfs pool disk1 not exported, driver still loaded; see the notification, then run: multiarray stop 7" ] && ok "status names a stop that kept an unexported zfs pool, with the command to finish it" || bad "stop_incomplete: '$got'"
+[ "$got" = "stop incomplete: zfs pool disk1 not exported, driver still loaded; /var/log/multiarray.log has the zpool error with the busy mount point (only the first failed stop raises a notification); see what uses it with fuser -vm '<mount point>', close it, then run: multiarray stop 7" ] && ok "status names a stop that kept an unexported zfs pool, with the command to finish it" || bad "stop_incomplete: '$got'"
 got=$(bash -c "inst_running() { return 1; }; inst_pids() { :; }; drv_loaded() { return 1; }; RUNROOT=$T/run; $(fn stop_incomplete); stop_incomplete 7" 2>&1)
 [ -z "$got" ] && ok "a cleanly stopped array (driver unloaded) is not reported as incomplete" || bad "stop_incomplete on a clean stop: '$got'"
 fn start_one | grep -q 'case $inc in \*"zfs pool"\*) echo "array $N: $inc"' && ok "start refuses with the same words while the pool is still imported" || bad "start_one does not name the incomplete stop"

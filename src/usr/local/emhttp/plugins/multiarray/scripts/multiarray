@@ -242,7 +242,7 @@ stop_incomplete() {
   local N=$1 p
   inst_running $N && return 0; [ -z "$(inst_pids $N)" ] || return 0; drv_loaded $N || return 0
   p=$(zpool list -H -o name 2>/dev/null | grep -sxF -f - $RUNROOT/a$N/zpools | tr '\n' ' '); p=${p% }   # still imported ones
-  if [ -n "$p" ]; then echo "stop incomplete: zfs pool ${p// /, } not exported, driver still loaded; see the notification, then run: multiarray stop $N"
+  if [ -n "$p" ]; then echo "stop incomplete: zfs pool ${p// /, } not exported, driver still loaded; /var/log/multiarray.log has the zpool error with the busy mount point (only the first failed stop raises a notification); see what uses it with fuser -vm '<mount point>', close it, then run: multiarray stop $N"
   else echo "stop incomplete: driver still loaded (a disk of array $N is still in use); see $LOG, then run: multiarray stop $N"; fi
 }
 busy_lock() { ! flock -n $RUNROOT/lock true 2>/dev/null; }   # a start or stop holds the lock (its driver may be loaded mid-way)

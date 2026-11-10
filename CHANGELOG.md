@@ -2,6 +2,8 @@
 
 Copied by the build from the <CHANGES> block of multiarray.plg; edit the .plg, not this file.
 
+## 2026.11.10b
+- An extra array's zfs pool that does not export when the array stops now raises one notification per incident instead of one per failed stop (one held pool gave 4 before). The notification shows how to find what uses the pool (example: fuser -vm '/mnt/disk1') and says that later failed stops are only logged in /var/log/multiarray.log. Exporting the pool or starting the array again starts a new incident. Nothing to do after updating.
 ## 2026.11.10a
 - Extra arrays now send Unraid's own notifications, like array 1: disk utilization, disk temperature, SMART, disk errors, pool status and "Parity-Check started/finished". Unraid's unchanged monitor runs for each started extra array, on array 1's system-monitoring schedule (Settings, Notifications), with that array's own state, thresholds and memory of what it already reported, so each warning comes once. Every such notification begins with the array's number (example: Array 2: Warning [TOWER-A2] - Disk 1 is high on usage (15%)) and links to that array's Main tab; it goes where array 1's notifications go (the GUI, e-mail, agents). Unassigned disks are still reported by array 1 alone.
 - After updating, nothing needs restarting: running extra arrays are watched from the next minute on, and the first run reports what is already above a threshold (as after a reboot).
