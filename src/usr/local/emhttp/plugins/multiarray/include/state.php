@@ -7,7 +7,7 @@ $n = ma_n($_POST['n'] ?? 0);
 $ini = ma_state($n).'/disks.ini';
 $disks = is_file($ini) ? @parse_ini_file($ini, true) : false;
 if (!is_array($disks)) {   // never a silent pass: without the state file the pools cannot be checked
-  echo htmlspecialchars("Array $n: its disk state ($ini) could not be read, so its pools could not be checked. Check that the array is running: multiarray status");
+  echo htmlspecialchars("Array $n: its disk state ($ini) could not be read, so its pools could not be checked. Check that array $n's instance is up: multiarray status");
   exit;
 }
 $err = [];

@@ -105,13 +105,12 @@ X;
   sub($s, "action='/update.htm'", "action='$fwd'", 'device_list form action');
   sub($s, "value='\"._var(\$var,'csrf_token').\"'", "value='\".(@parse_ini_file('/var/local/emhttp/var.ini')['csrf_token']??'').\"'", 'host csrf token in assignment form');
   sub($s, '"/Main/$source?name=$realName"', "\"/Main$N\"", 'per-disk page link (no per-array Device page)');
-  /* Browse icons would open the HOST's /mnt/diskN or /mnt/<pool>: the host cannot see an extra array's mounts */
-  $browse = <<<'X'
-"<a class='view' href=\"/Main/Browse?dir=".htmlspecialchars($dir)."\"><i class=\"icon-u-tab\" title=\""._('Browse')." $dir\"></i></a>"
-X;
-  sub($s, $browse, "\"<a class='view'></a>\"", 'disk Browse links (host paths; removed)');
-  sub($s, '"/Main/Browse?dir=".htmlspecialchars($poolDir) : $poolDeviceUrl', '$poolDeviceUrl : $poolDeviceUrl', 'pool Browse link (host path; removed)');
-  sub($s, '"/Main/Browse?dir=".htmlspecialchars($bootDir) : $bootDeviceUrl', '$bootDeviceUrl : $bootDeviceUrl', 'boot Browse link (host path; removed)');
+  /* Browse icons would open the HOST's /mnt/diskN or /mnt/<pool>: the host cannot see an extra array's mounts.
+   * Both stock forms match: 7.3.x (class 'view', htmlspecialchars, icon-u-tab "Browse") and 7.4.0 (class 'view info',
+   * rawurlencode, fa-folder-o "Open in File Manager"). Anything else is a miss, and the leftover check below fails. */
+  sub($s, '#"<a class=\'view(?: info)?\' href=\\\\"/Main/Browse\?dir="\.(?:htmlspecialchars|rawurlencode)\(\$dir\)\."\\\\">[^\n]*?</a>"#', "\"<a class='view'></a>\"", 'disk Browse links (host paths; removed)', true);
+  sub($s, '#"/Main/Browse\?dir="\.(?:htmlspecialchars|rawurlencode)\(\$poolDir\) : \$poolDeviceUrl#', '$poolDeviceUrl : $poolDeviceUrl', 'pool Browse link (host path; removed)', true);
+  sub($s, '#"/Main/Browse\?dir="\.(?:htmlspecialchars|rawurlencode)\(\$bootDir\) : \$bootDeviceUrl#', '$bootDeviceUrl : $bootDeviceUrl', 'boot Browse link (host path; removed)', true);
   if (strpos($s, '/Main/Browse') !== false) { $miss++; fwrite(STDERR, "gen-pages: a$N: a Browse link to a host path is left in device_list$N\n"); }
   file_put_contents("$PL/nchan/device_list$N", $s); chmod("$PL/nchan/device_list$N", 0755);
 
