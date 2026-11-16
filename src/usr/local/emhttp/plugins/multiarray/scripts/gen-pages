@@ -76,6 +76,19 @@ X;
 X;
   $phint = "Array $N checks parity on its own schedule; the Scheduler page sets array 1's. Set it in a terminal, for example: multiarray check-schedule $N '0 2 1 * *' (on the 1st of every month at 02:00, errors reported, parity not changed), or off. Without one, array $N is checked only when you click Check.";
   sub($b, $psched, "<span style=\"cursor:help;border-bottom:1px dotted\" title=\"$phint\">(_(Schedule)_)</span>", 'parity check Schedule link (array 1 Scheduler; replaced by a hint)');
+  /* pool-state check before Start: stock Report.php cmd=state reads array 1's state/disks.ini; ask array N's own */
+  sub($b, "\$.post('/webGui/include/Report.php',{cmd:'state',pools:", "\$.post('/plugins/multiarray/include/state.php',{n:$N,pools:", 'pool-state check before Start (Report.php)');
+  /* keyfile controls: KeyUpload.php writes and deletes array 1's keyfile (the host var.ini luksKeyfile), not array N's.
+   * Array N takes a passphrase only; no keyfile option, no forced keyfile input on a wrong key, no Delete keyfile form. */
+  sub($b, "\$keyfile = file_exists(_var(\$var,'luksKeyfile'));", "\$keyfile = false; /* keyfile controls act on array 1's keyfile: not offered for array $N */", 'keyfile state (array 1 keyfile)');
+  $knote = "Array $N takes a passphrase only: the keyfile upload acts on array 1 and would replace array 1's keyfile";
+  sub($b, "  echo mk_option(1,'file',_('Keyfile'));\n  echo \"</select></td></tr>\";", "  echo \"</select></td></tr>\";\n  echo \"<tr><td></td><td></td><td>$knote.</td></tr>\";", 'Keyfile input option (array 1 keyfile; replaced by a note)');
+  sub($b, "      var data = {};\n      data['#file'] = 'unused';\n      data['#include'] = 'webGui/include/KeyUpload.php';\n      data['file'] = form.file.value;\n      \$.post('/update.php',data,function(){form.submit();});",
+          "      /* no passphrase: nothing is sent (the stock keyfile upload here would write or delete array 1's keyfile) */\n      form.input.disabled = false; form.local.disabled = false; form.file.disabled = false; form.text.disabled = false; form.copy.disabled = false;\n      button.disabled = false;",
+          'keyfile upload before Start (array 1 keyfile; removed)');
+  sub($b, '#<form name="delete_keyfile".*?</form>#s', '', 'Delete keyfile forms (array 1 keyfile; removed)', true);
+  sub($b, "<br>_(Otherwise use the **keyfile** method for UTF8 input)_", '', 'keyfile advice in the passphrase error (removed)');
+  if (strpos($b, 'KeyUpload.php') !== false || strpos($b, '/webGui/include/Report.php') !== false) { $miss++; fwrite(STDERR, "gen-pages: a$N: a keyfile or pool-state call that acts on array 1 is left in Main{$N}Operation\n"); }
   $hdrs = "Menu=\"Main$N:5\"\nTitle=\"Array $N Operation\"\nTag=\"".hdr($ao[0], 'Tag')."\"\nNchan=\"device_list$N,parity_list$N\"\nCond=\"$cond\"\n---\n";
   file_put_contents("$PL/Main{$N}Operation.page", $hdrs.$enter.$b.$leave);
 

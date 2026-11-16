@@ -44,6 +44,8 @@ grep -q 'Lime Technology' "$P/MultiArrayXport.page" && grep -q 'Lime Technology'
 grep -q 'if \[ -d /var/lib/multiarray \] || grep -qs' "$PLG" && ok "remove: stop and host filter only when extra arrays ran or are enabled" || bad "remove still runs multiarray stop unconditionally"
 ! grep -rqE 'mount |wipefs|sgdisk|sfdisk|mkfs|dd .*of=/dev/(sd|hd|vd|nvme|md|dm|mapper)|>\s*/dev/sd' "$P/include/disks.php" "$P/scripts/disks-job" && ok "Disks code has no mount, partitioning, formatting or disk write command" || bad "a write-capable command in the Disks code"
 grep -q "fopen(\$node, 'rb')" "$P/include/disks.php" && ! grep -qE "fopen\([^)]*'(w|a|r\+|c|x)" "$P/include/disks.php" && ok "Disks code opens disks read-only only" || bad "Disks code opens a disk writable"
+grep -q "include/state.php',{n:\$N,pools:" "$P/scripts/gen-pages" && grep -q 'ma_n(\$_POST' "$P/include/state.php" && grep -q 'never a silent pass' "$P/include/state.php" && ok "extra array Start checks its own pools (state.php, integer array id, unreadable state is reported)" || bad "pool-state check before Start"
+grep -q "keyfile = false; /\* keyfile controls act on array 1" "$P/scripts/gen-pages" && grep -q "a keyfile or pool-state call that acts on array 1 is left" "$P/scripts/gen-pages" && ok "extra array tabs have no keyfile controls (they act on array 1's keyfile)" || bad "keyfile controls on extra array tabs"
 [ -s "$HERE/icon.png" ] && ok "icon.png" || bad "icon.png"
 for f in "$HERE"/docs/screenshots/*.png; do grep -q "docs/screenshots/$(basename "$f"))" "$HERE/README.md" && ok "README shows $(basename "$f")" || bad "README lacks $f"; done
 [ $fail -eq 0 ] && echo "all checks passed" || { echo "checks FAILED"; exit 1; }

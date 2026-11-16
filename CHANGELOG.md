@@ -2,6 +2,10 @@
 
 Copied by the build from the <CHANGES> block of multiarray.plg; edit the .plg, not this file.
 
+## 2026.11.16a
+- Fix: Start on an extra array's Main tab checked array 1's pools for errors, not that array's own. A broken pool of array 1 with the same name could block a healthy extra array, and a broken pool of the extra array was not caught. The check now reads the extra array's own pool states. If those cannot be read, Start says so instead of going ahead unchecked.
+- Fix: the keyfile controls on an extra array's Main tab (Keyfile as encryption input, and Delete keyfile) acted on array 1's keyfile: they could replace or delete array 1's key. An extra array now takes a passphrase only, a short note under the input says why, and Delete keyfile is not shown there. Array 1's Main tab is unchanged.
+- After updating, nothing needs restarting: the Main tabs of extra arrays are rebuilt when the plugin is installed.
 ## 2026.11.10b
 - An extra array's zfs pool that does not export when the array stops now raises one notification per incident instead of one per failed stop (one held pool gave 4 before). The notification shows how to find what uses the pool (example: fuser -vm '/mnt/disk1') and says that later failed stops are only logged in /var/log/multiarray.log. Exporting the pool or starting the array again starts a new incident. Nothing to do after updating.
 ## 2026.11.10a
