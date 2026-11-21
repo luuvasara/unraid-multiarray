@@ -243,6 +243,12 @@ $pl = $d['pools'][0] ?? [];
 check(count($d['pools'] ?? []) === 1 && $pl['name'] === 'cache' && $pl['fs'] === 'btrfs' && $pl['profile'] === 'raid1' && $pl['slots'] === 2
   && array_column($pl['devices'], 'member') === ['cache', 'cache2'] && $pl['devices'][1]['serial'] === 'S-PPP2' && $pl['settings']['diskFsType'] === 'btrfs', 'export: the pool with its members, profile and settings file');
 check(($d['shares'] ?? null) === [['name' => 'media', 'settings' => ['shareUseCache' => 'yes', 'shareCachePool' => 'cache']]], 'export: share settings files');
+/* a failed probe (null) is not "nothing found" ([]): the warning says could not be probed, never wiped or never formatted */
+$r2 = ma_x_export(1, ctx($R, ['blkid' => function($node) use ($probe) { $b = basename($node); return in_array($b, ['sdc1', 'sde1']) ? null : ($probe[$b] ?? []); }]));
+$sl2 = []; foreach ($r2['data']['slots'] ?? [] as $s) $sl2[$s['role']] = $s;
+check(preg_grep('/^disk2: the disk could not be probed .*blkid could not read sdc1.*setting \(zfs\).*do not format/', $r2['warnings'] ?? []) && !preg_grep('/disk2: no file system found|wiped|never formatted/', $r2['warnings'] ?? [])
+  && ($sl2['disk2']['fs'] ?? null) === ['type' => 'zfs', 'uuid' => null, 'pool' => 'disk2'], 'export: a slot whose probe failed is reported as not probed (type from its setting), not as holding no file system');
+check((bool)preg_grep('/^pool cache: member cache2 could not be probed .*sde1/', $r2['warnings'] ?? []) && !preg_grep('/could not be probed/', $r['warnings'] ?? []), 'export: a pool member whose probe failed is named; a probe that found nothing gives no such warning');
 rmrf($R);
 $expF = $d;
 /* plan into array 2: pool disks found and noted, share noted; then a zfs name clash */
@@ -253,6 +259,9 @@ check($p['ok'] && ($p['pools'][0]['found'][1]['device'] ?? '') === 'sdo' && preg
 check(ma_x_plan_hash($p) !== ma_x_plan_hash(['target' => 2, 'rows' => $p['rows']]), 'confirm code covers the pool disks too');
 $p = ma_x_plan($expF, 2, ctx($R, ['zpools' => fn() => ['disk1']]));
 check(!$p['ok'] && preg_grep('/disk1: its zfs pool name "disk1" is already used by a pool that is imported.*slot\'s name.*zpool list/', $p['problems']), 'plan: a zfs pool name already imported is refused with the reason and what to do');
+check($p['unchecked'] === [] && ma_x_plan($expF, 2, ctx($R))['unchecked'] === [], 'plan: pools listed (also none): nothing is reported as unchecked');
+$p = ma_x_plan($expF, 2, ctx($R, ['zpools' => fn() => null]));
+check($p['ok'] && count($p['unchecked']) === 1 && preg_match('/^zfs pool names \(disk1.*could not be listed.*zpool list -H -o name$/', $p['unchecked'][0]), 'plan: imported zfs pools that could not be listed give a "not checked" warning, not a silent pass');
 $a3 = "$R/run/a3/state/disks.ini"; put($a3, ini(['disk1' => ['idx' => 1, 'type' => 'Data', 'id' => 'X_1', 'fsType' => 'luks:zfs']], true));
 $p = ma_x_plan($expF, 2, ctx($R));
 check(!$p['ok'] && preg_grep('/"disk1" is already used by array 3/', $p['problems']), 'plan: a zfs pool name another array is set up to use is refused (before Start would)');

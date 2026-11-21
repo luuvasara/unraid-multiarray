@@ -2,14 +2,20 @@
 <!DOCTYPE PLUGIN [
 <!ENTITY name    "multiarray">
 <!ENTITY author  "Multi Arrays project">
-<!ENTITY version "2026.11.16a">
+<!ENTITY version "2026.11.21a">
 <!ENTITY source  "https://raw.githubusercontent.com/luuvasara/unraid-multiarray/main">
 <!ENTITY base    "/boot/config/plugins/&name;">
-<!ENTITY md5     "53c32be761295549c375ee96dede756c">
+<!ENTITY md5     "20549bb7092eeca350a8766635135b03">
 ]>
 <PLUGIN name="&name;" author="&author;" version="&version;" min="7.3.0" icon="server" launch="Settings/MultiArray" pluginURL="&source;/&name;.plg" support="https://github.com/luuvasara/unraid-multiarray/issues">
 
 <CHANGES>
+###2026.11.21a
+- Fix: on Unraid 7.4.0 the Settings > Multi Arrays page was blank. The page used a variable name ($i) that the 7.4.0 tab layout also uses as its tab counter, so PHP stopped with "Cannot increment array" before anything was drawn. The page now uses its own names. The Disks tab had the same clash with a number and is changed too.
+- Fix: on the Export and import tab, a request that failed (the session ended, a server error, no answer) left the page as it was, with no message. After Start array it stayed on "Starting..." with the button and the tick box switched off; after Start read-only parity check the button stayed switched off; and the two array lists stayed empty when they could not be loaded. Each now shows what failed and why (example: The start request failed: the server answered HTTP 500), and the controls work again. After a failed Start or check request, look at the array's Main tab first: the request may still have reached the server.
+- Fix: an export no longer says "no file system found ... wiped or never formatted" about a disk that could not be read. blkid gives the same result for a disk with nothing on it and for a disk it cannot open or read, so the export now also tries to read the disk's first sector. If that fails, the warning says the disk could not be probed, that this says nothing about what is on it, and not to format it because of this. The same is said for a pool member that could not be probed.
+- Fix: the import plan no longer takes "the zfs pools could not be listed" for "no zfs pool is imported". If zpool list fails or gives no answer within 10 seconds, the plan shows a "Not checked" warning with the pool names and the command to check them by hand (zpool list -H -o name). The check against the other arrays' settings still runs.
+- After updating, nothing needs restarting.
 ###2026.11.16a
 - Fix: Start on an extra array's Main tab checked array 1's pools for errors, not that array's own. A broken pool of array 1 with the same name could block a healthy extra array, and a broken pool of the extra array was not caught. The check now reads the extra array's own pool states. If those cannot be read, Start says so instead of going ahead unchecked.
 - Fix: the keyfile controls on an extra array's Main tab (Keyfile as encryption input, and Delete keyfile) acted on array 1's keyfile: they could replace or delete array 1's key. An extra array now takes a passphrase only, a short note under the input says why, and Delete keyfile is not shown there. Array 1's Main tab is unchanged.

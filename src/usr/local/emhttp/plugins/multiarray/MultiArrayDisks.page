@@ -68,10 +68,10 @@ sleeping disk is not woken for them. <em>Details</em> shows every name the disk 
 </div>
 <?if ($u['cabling'] && $u['ports_known']): $mad_gr = $u['groups'];?>
 <form class="ma-d-cab" data-d="cabling" data-switch="<?=$mad_h($u['switch'])?>">
-<?foreach ($u['controllers'] as $i => $ctl):?>
-<dl><dt><label for="ma-d-cab-<?=$u['unit']?>-<?=$i?>">Controller <?=$i + 1?> (<?=$mad_h($ctl)?>) feeds bays:</label></dt>
-<dd><select id="ma-d-cab-<?=$u['unit']?>-<?=$i?>" name="order[]">
-<?foreach ($mad_gr as $gk => $bays):?><option value="<?=$mad_h($gk)?>"<?=((string)($u['cabling'][$i] ?? '') === (string)$gk) ? ' selected' : ''?>><?=$mad_h(reset($bays).'-'.end($bays))?></option><?endforeach;?>
+<?foreach ($u['controllers'] as $madCi => $ctl):?>
+<dl><dt><label for="ma-d-cab-<?=$u['unit']?>-<?=$madCi?>">Controller <?=$madCi + 1?> (<?=$mad_h($ctl)?>) feeds bays:</label></dt>
+<dd><select id="ma-d-cab-<?=$u['unit']?>-<?=$madCi?>" name="order[]">
+<?foreach ($mad_gr as $gk => $bays):?><option value="<?=$mad_h($gk)?>"<?=((string)($u['cabling'][$madCi] ?? '') === (string)$gk) ? ' selected' : ''?>><?=$mad_h(reset($bays).'-'.end($bays))?></option><?endforeach;?>
 </select></dd></dl>
 <?endforeach;?>
 <dl><dt>&nbsp;</dt><dd><input type="submit" value="<?=$u['confirmed'] ? 'Save cabling' : 'Confirm cabling'?>"> <span data-d="cabout" role="status" aria-live="polite"></span></dd></dl>

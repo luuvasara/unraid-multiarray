@@ -80,6 +80,12 @@ confirms the import.</p>
   function name(n){return n==1?'Array 1 (main array)':'Array '+n;}
   function line(box,cls,text){$('<div>').addClass(cls||'').text(text).appendTo(box);}
   function list(box,items,cls){var ul=$('<ul>').appendTo(box);(items||[]).forEach(function(x){$('<li>').addClass(cls||'').text(x).appendTo(ul);});}
+  /* why a request failed, in a few words: the server's own message, the HTTP status, or no answer at all */
+  function why(x,ts){
+    if (x.responseJSON&&x.responseJSON.error) return x.responseJSON.error;
+    if (ts=='parsererror') return 'the answer was not the expected one (the session may have ended: reload the page and log in again)';
+    return x.status?'the server answered HTTP '+x.status:'no answer from the server';
+  }
   function noTarget(){ $('#ma-x-plan').prop('disabled',true); line($('#ma-x-planbox').empty(),'','No array here can take an import now: the target must be stopped and empty (an extra array with no disks assigned or pinned, or the main array of a fresh server).'); }
   function arrays(){
     $.getJSON(url,{action:'arrays'},function(d){
@@ -91,7 +97,7 @@ confirms the import.</p>
       if (!t.find('option:enabled').length) noTarget();
       else t.val(t.find('option:enabled').first().val());
       if (!d.service) line($('#ma-x-exmsg').empty(),'','Extra arrays are not enabled on this server: export works for the main array, and import only into a fresh main array.');
-    });
+    }).fail(function(x,ts){line($('#ma-x-exmsg').empty(),'ma-bad','The list of arrays could not be loaded: '+why(x,ts)+'. Reload the page to try again.');});
   }
   $('#ma-x-export').on('click',function(){
     var n=$('#ma-x-src').val(), box=$('#ma-x-exmsg').empty(); $('#ma-x-why').prop('hidden',true);
@@ -141,6 +147,7 @@ confirms the import.</p>
         });
       }
       if (p.warnings&&p.warnings.length){line(box,'ma-warn',detected?'Notes from the detection:':'Warnings recorded at export:'); list(box,p.warnings,'ma-warn');}
+      if (p.unchecked&&p.unchecked.length){line(box,'ma-warn','Not checked:'); list(box,p.unchecked,'ma-warn');}
       if (p.notes&&p.notes.length){line(box,'ma-warn','Pools and shares of the exported array (the import assigns the array slots only, so a pool is never formatted by mistake):'); list(box,p.notes,'ma-warn');}
       if (!p.ok){line(box,'ma-bad','Nothing can be imported:'); list(box,p.problems,'ma-bad'); return;}
       if (p.encrypted) line(box,'ma-warn','The array is encrypted: after the import, start it from its Main tab with its passphrase and "Parity is already valid".');
@@ -168,14 +175,20 @@ confirms the import.</p>
       if (!r.ok){line(box,'ma-bad',r.error); return;}
       line(box,'ma-good','Array '+plan.target+' started ('+r.mdState+').'+(r.running?' A parity operation is running: '+r.resync:''));
       $('#ma-x-checkbox').prop('hidden',false);
-    },'json');
+    },'json').fail(function(x,ts){
+      line(box,'ma-bad','The start request failed: '+why(x,ts)+'. The array may or may not have started: check the Main tab of array '+plan.target+' before trying again.');
+      $('#ma-x-start,#ma-x-startyes').prop('disabled',false);
+    });
   });
   $('#ma-x-check').on('click',function(){
     var box=$('#ma-x-result'); $(this).prop('disabled',true);
     $.post(url,{action:'check',target:plan.target,csrf_token:csrf},function(r){
       line(box,r.ok?'ma-good':'ma-bad',r.ok?'Read-only parity check started; follow it on the Main tab of array '+plan.target+'. The result is shown here when it ends.':r.error);
       if (r.ok) checkWatch(plan.target);
-    },'json');
+    },'json').fail(function(x,ts){
+      line(box,'ma-bad','The request to start the check failed: '+why(x,ts)+'. See the Main tab of array '+plan.target+' for whether a check is running before trying again.');
+      $('#ma-x-check').prop('disabled',false);
+    });
   });
   /* follow the read-only check and say what its result means; nothing is done automatically */
   function checkWatch(n){

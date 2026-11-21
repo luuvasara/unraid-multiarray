@@ -38,8 +38,8 @@ function ma_x_ctx($over = []) {
     'version'   => '/etc/unraid-version',
     'hostname'  => gethostname(),
     'now'       => time(),
-    'blkid'     => 'ma_x_blkid',            // callable(devnode) => ['TYPE'=>..,'UUID'=>..] (read-only probe)
-    'zpools'    => 'ma_x_zpools',           // callable() => names of the imported zfs pools
+    'blkid'     => 'ma_x_blkid',            // callable(devnode) => ['TYPE'=>..,'UUID'=>..] (read-only probe); [] nothing found, null the probe failed
+    'zpools'    => 'ma_x_zpools',           // callable() => names of the imported zfs pools; null when they could not be listed
     'allow_virtual' => ma_x_test_allow_virtual(),
   ];
 }
@@ -58,11 +58,19 @@ function ma_x_serial($id) { $p = strrpos((string)$id, '_'); return $p === false 
 /* one name per file system: blkid says zfs_member, Unraid's settings say zfs */
 function ma_x_fsname($t) { $t = (string)$t; return $t === 'zfs_member' ? 'zfs' : ($t === '' ? null : $t); }
 
+/* [] = probed and nothing found; null = the probe failed, which says nothing about what is on the device.
+ * blkid -p exits 2, with no message, both when it finds nothing and when it cannot open or read the device (blkid(8),
+ * EXIT STATUS; measured with util-linux 2.42.4 on a blank file, a missing device and a device that returns read
+ * errors). So exit 2 counts as "nothing found" only when the device's first sector can be read here. */
 function ma_x_blkid($node) {
-  if (!is_string($node) || !preg_match('#^/dev/[A-Za-z0-9/_.-]+$#', $node)) return [];
-  $out = []; @exec('/sbin/blkid -p -o export '.escapeshellarg($node).' 2>/dev/null', $lines);
+  if (!is_string($node) || !preg_match('#^/dev/[A-Za-z0-9/_.-]+$#', $node)) return null;
+  $out = []; $lines = []; $rc = -1; @exec('/sbin/blkid -p -o export '.escapeshellarg($node).' 2>/dev/null', $lines, $rc);
   foreach ((array)$lines as $l) if (preg_match('/^([A-Z_]+)=(.*)$/', $l, $m)) $out[$m[1]] = $m[2];
-  return $out;
+  if ($rc === 0) return $out;
+  if ($rc !== 2) return null;   // 4: an error, 8: colliding signatures, 126/127: blkid did not run
+  $h = @fopen($node, 'rb'); $ok = $h !== false && strlen((string)@fread($h, 512)) === 512;
+  if ($h !== false) fclose($h);
+  return $ok ? [] : null;
 }
 
 /* /proc/mdstat style key=value file -> array */
@@ -183,9 +191,14 @@ function ma_x_export($n, $ctx = null, $pluginVersion = '') {
     $fsType = (string)($d['fsType'] ?? '');
     if ($i != 0 && $i != 29) {
       $node = ma_x_fsnode($ctx, $info, $p, $i);
-      $b = $node ? (array)call_user_func($ctx['blkid'], $node) : [];
+      $probe = $node ? call_user_func($ctx['blkid'], $node) : [];
+      $b = (array)$probe;
       $cfgFs = preg_replace('/^luks:/', '', $fsType) ?: null;
       if (($b['TYPE'] ?? '') === 'crypto_LUKS') { $luks = ['encrypted' => true, 'uuid' => $b['UUID'] ?? null]; $fs['type'] = ma_x_fsname($cfgFs); }
+      elseif ($probe === null) {   /* the probe failed: that says nothing about what is on the disk, so never "no file system" */
+        $warnings[] = "$role: the disk could not be probed for its file system (blkid could not read ".basename($node)." or ended with an error), so the export has ".($cfgFs ? "the type from its setting ($fsType)" : 'no file system type')." and no UUID for it. This says nothing about what is on the disk: do not format it because of this. Check the disk and its cable, then export again.";
+        $fs['type'] = ma_x_fsname($cfgFs); if (strncmp($fsType, 'luks:', 5) === 0) $luks['encrypted'] = true;
+      }
       elseif ($node && ($b['TYPE'] ?? '') === '') {   /* probed and empty: the setting alone does not make a file system */
         if ($cfgFs) $warnings[] = "$role: no file system found on the disk, although its setting says $fsType (for example a disk that was wiped or never formatted). After an import it shows Unmountable and Format is offered: format it only if it holds nothing you need.";
       } else { $fs = ['type' => ma_x_fsname(($b['TYPE'] ?? null) ?: $cfgFs), 'uuid' => $b['UUID'] ?? null];
@@ -261,7 +274,11 @@ function ma_x_export_pools($ctx, $p, $disks) {
     $id = (string)($d['id'] ?? ''); $dev = (string)($d['device'] ?? '');
     if ($id === '') continue;   // an empty member slot
     $info = $dev !== '' ? ma_x_devinfo($ctx, $dev) : null;
-    $b = []; if ($info && $info['partition'] && file_exists($ctx['dev'].'/'.$info['partition']['name'])) $b = (array)call_user_func($ctx['blkid'], $ctx['dev'].'/'.$info['partition']['name']);
+    $b = [];
+    if ($info && $info['partition'] && file_exists($ctx['dev'].'/'.$info['partition']['name'])) {
+      $probe = call_user_func($ctx['blkid'], $ctx['dev'].'/'.$info['partition']['name']); $b = (array)$probe;
+      if ($probe === null) $w[] = "pool $name: member $k could not be probed for its file system (blkid could not read {$info['partition']['name']} or ended with an error); the export has no file system type or UUID for it. This says nothing about what is on the disk.";
+    }
     if (ma_x_fsname($b['TYPE'] ?? '') === 'zfs' && ($b['LABEL'] ?? '') !== '') $pools[$name]['zfs_pool'] = $b['LABEL'];
     $pools[$name]['devices'][] = ['member' => (string)$k, 'id' => $id, 'serial' => ma_x_serial($id), 'size_kb' => (int)($d['size'] ?? 0),
       'sectors' => $info['sectors'] ?? null, 'model' => $info['model'] ?? '', 'by_id' => $info['by_id'] ?? [],
@@ -412,12 +429,13 @@ function ma_x_plan($data, $target, $ctx = null) {
     $rows[] = $row;
   }
   $maxData = 0; foreach ($slots as $s) if ($s['slot'] >= 1 && $s['slot'] <= 28) $maxData = max($maxData, $s['slot']);
-  $problems = array_merge($problems, ma_x_zfs_clashes($data, (int)$target, $ctx));
+  $unchecked = [];
+  $problems = array_merge($problems, ma_x_zfs_clashes($data, (int)$target, $ctx, $unchecked));
   [$pools, $notes] = ma_x_plan_pools($data, (int)$target, $cand, $taken);
   $notes = array_merge($notes, ma_x_plan_shares($data, (int)$target, $ctx));
   return ['ok' => !$problems, 'rows' => $rows, 'problems' => $problems, 'target' => (int)$target, 'max_data_slot' => $maxData,
           'encrypted' => !empty($data['encrypted']), 'settings' => $data['settings'] ?? [], 'warnings' => $data['warnings'] ?? [],
-          'pools' => $pools, 'notes' => $notes];
+          'pools' => $pools, 'notes' => $notes, 'unchecked' => $unchecked];
 }
 
 /* zfs pool names the export asks for (array zfs disks: named after the slot; pools: their own name) */
@@ -429,9 +447,12 @@ function ma_x_wanted_zfs($data) {
 }
 /* zfs pool names are server-wide: a name already imported, or one another array (or array 1) is set up to use, can't
  * be used by the imported array too. Found here, in the plan, before anything is assigned (else only Start refuses). */
-function ma_x_zfs_clashes($data, $target, $ctx) {
+function ma_x_zfs_clashes($data, $target, $ctx, &$unchecked = []) {
   $want = ma_x_wanted_zfs($data); if (!$want) return [];
-  $imported = array_filter(array_map('trim', (array)call_user_func($ctx['zpools'] ?? 'ma_x_zpools')));
+  $imported = call_user_func($ctx['zpools'] ?? 'ma_x_zpools');
+  /* not listed is not "none imported": say what was left unchecked instead of passing silently */
+  if ($imported === null) $unchecked[] = 'zfs pool names ('.implode(', ', array_keys($want)).'): the zfs pools imported on this server could not be listed (zpool list failed or gave no answer within 10 seconds), so these names were checked against the arrays\' settings only. With a name that an imported pool already uses, starting the array would be refused (or fail to import). Check before you start it: zpool list -H -o name';
+  $imported = array_filter(array_map('trim', (array)$imported));
   $users = [];   // pool name => which array's configuration uses it
   for ($n = 1; $n <= 9; $n++) {
     if ($n == $target) continue;
@@ -453,7 +474,8 @@ function ma_x_zfs_clashes($data, $target, $ctx) {
   }
   return $e;
 }
-function ma_x_zpools() { $o = []; @exec('/usr/sbin/zpool list -H -o name 2>/dev/null', $o); return $o; }
+/* null = not listed (zpool failed, or gave no answer in 10 s and was ended by timeout): not the same as no pools */
+function ma_x_zpools() { $o = []; $rc = -1; @exec('/usr/bin/timeout 10 /usr/sbin/zpool list -H -o name 2>/dev/null', $o, $rc); return $rc === 0 ? $o : null; }
 /* pools in the export: which disks here carry their members (same serial + size, free). Nothing is assigned: the plan
  * says how to add the pool on the target's Main tab; the found disks are pinned with the array so array 1 does not offer them. */
 function ma_x_plan_pools($data, $target, $cand, $taken) {

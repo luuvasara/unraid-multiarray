@@ -123,4 +123,8 @@ fn start_one | grep -q 'case $inc in \*"zfs pool"\*) echo "array $N: $inc"' && o
 grep -q '"incomplete\\":\\"$inc\\"' $P/scripts/multiarray && grep -q 'inc=$(stop_incomplete $N); if \[ -n "$inc" \]' $P/scripts/multiarray && ok "status and status-json carry the incomplete stop" || bad "status/status-json without the incomplete stop"
 fn stop_one | grep -B1 '^  export_own $N ||' | grep -q 'rm -f $RUNROOT/a$N/ns.id' && ok "stop forgets the ended namespace before a pool export can fail (the GUI no longer shows the array as up)" || bad "stop_one keeps ns.id while the export fails"
 grep -q 'i.incomplete' $P/include/main.php && grep -q "(run||inc)?'':'none'" $P/include/main.php && grep -q "\$maSt\[\$n\]\['incomplete'\]" $P/MultiArray.page && ok "MainN bar and Settings show the incomplete stop; MainN offers Stop instance to finish it" || bad "GUI does not show the incomplete stop"
+# Unraid 7.4.0 evaluates a tab's page inside its tab loop (MainContentTabbed.php), so a page shares that loop's variables.
+# A page that sets one of them breaks the layout ($docroot is only read, so it is not in the list): $i as an array stopped the whole Settings page with "Cannot increment array".
+clash=$(grep -n -E '\$(i|page|pages|title|tabId|path|myPage|defaultIcon|evalContent|evalFile|skipIndexIncrement)\b' $P/*.page)
+[ -z "$clash" ] && ok "no page uses a variable name of Unraid's tab layout" || bad "a page uses a variable of Unraid's tab layout: $clash"
 [ $f -eq 0 ] && echo "guards tests: all $n passed" || { echo "guards tests: $f failed"; exit 1; }
